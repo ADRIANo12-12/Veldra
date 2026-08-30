@@ -12,9 +12,9 @@
 # SquashFS containing the Veldra TUI and autologin setup, then rewrites the ISO
 # while preserving the original BIOS/UEFI boot metadata.
 #
-# This is a compatibility build path for hosted sandboxes. The normal
-# `make iso` path remains the canonical Veldra build and still uses the
-# isolated Arch container.
+# The SquashFS extraction runs under fakeroot: ownership changes requested by
+# unsquashfs are virtual, so Replit's runner remains the real owner of the
+# extracted files. The repacked SquashFS is then forced to root ownership.
 
 set -euo pipefail
 
@@ -34,23 +34,17 @@ ARCH_ISO_URL="https://geo.mirror.pkgbuild.com/iso/${ARCH_RELEASE}/${ARCH_ISO_NAM
 ARCH_ISO_SHA256="4e82dced1c4fd3e498b22a853f8db2a4d262d32b97e7e07d97390d9e425ffe5e"
 ARCH_ISO="${WORK}/${ARCH_ISO_NAME}"
 SOURCE_SFS="${WORK}/airootfs.sfs"
-# unsquashfs restores the original numeric owners. Those owners are correct
-# for an ISO but can make source files unwritable in Replit. Use a fresh
-# extraction directory for every run, then normalize through tar into a new
-# runner-owned tree before editing it. We never need to remove root-owned files.
 RUN_ID="${EPOCHSECONDS:-$(date +%s)}-${RANDOM}"
-EXTRACT_ROOTFS="${WORK}/rootfs-extract-${RUN_ID}"
 ROOTFS="${WORK}/rootfs-${RUN_ID}"
 NEW_SFS="${WORK}/veldra-airootfs-${RUN_ID}.sfs"
 
-vd_require curl xorriso unsquashfs mksquashfs sha256sum awk sed install mkdir rm cp tar
+vd_require curl xorriso unsquashfs mksquashfs fakeroot sha256sum awk sed install mkdir rm du
 
 vd_info "Replit-compatible Veldra ISO builder — ${VERSION} / ${ARCH}"
 vd_warn "This is a sandbox compatibility build; canonical 'make iso' remains the normal Arch-container pipeline."
 
 mkdir -p "$WORK" "$OUT"
 
-# --- official Arch source ISO -----------------------------------------------
 if [[ ! -f "$ARCH_ISO" ]]; then
     vd_info "downloading official Arch Linux ${ARCH_RELEASE} ISO (~1.5 GB)"
     curl -fL --retry 3 --retry-delay 2 --progress-bar \
@@ -63,37 +57,29 @@ fi
 printf '%s  %s\n' "$ARCH_ISO_SHA256" "$ARCH_ISO" | sha256sum -c -
 vd_ok "Arch ISO checksum verified"
 
-# Archiso stores the live x86_64 filesystem at this stable path.
 SFS_PATH="/arch/x86_64/airootfs.sfs"
 vd_info "Arch live root: $SFS_PATH"
-
-# Verify that the expected ISO member exists before extracting it.
 if ! xorriso -indev "$ARCH_ISO" -ls "$SFS_PATH" >/dev/null 2>&1; then
     vd_die 1 "official Arch ISO does not contain expected live root: $SFS_PATH"
 fi
 
-# --- extract and modify live rootfs -----------------------------------------
-rm -f "$SOURCE_SFS"
-mkdir -p "$EXTRACT_ROOTFS" "$ROOTFS"
+rm -f "$SOURCE_SFS" "$NEW_SFS"
+rm -rf "$ROOTFS"
+mkdir -p "$ROOTFS"
 
 vd_info "extracting Arch live rootfs"
 xorriso -osirrox on -indev "$ARCH_ISO" \
     -extract "$SFS_PATH" "$SOURCE_SFS" >/dev/null
 [[ -s "$SOURCE_SFS" ]] || vd_die 1 "failed to extract $SFS_PATH"
 
-vd_info "unpacking Arch live rootfs without root"
-unsquashfs -no-xattrs -d "$EXTRACT_ROOTFS" "$SOURCE_SFS" >/dev/null
-[[ -d "$EXTRACT_ROOTFS/etc" && -d "$EXTRACT_ROOTFS/usr" ]] || \
+vd_info "unpacking Arch live rootfs with fakeroot"
+# fakeroot intercepts ownership-changing syscalls made by unsquashfs. The
+# extracted files therefore remain physically owned by runner even though the
+# virtual metadata says root:root. This permits later edits without host root.
+fakeroot -- unsquashfs -no-xattrs -d "$ROOTFS" "$SOURCE_SFS" >/dev/null
+[[ -d "$ROOTFS/etc" && -d "$ROOTFS/usr" ]] || \
     vd_die 1 "extracted Arch rootfs does not look valid"
 
-vd_info "normalizing rootfs ownership for the Replit sandbox"
-# GNU tar creates destination files as the invoking user while --no-same-owner
-# ignores numeric UID/GID stored in the source archive. This avoids touching
-# root-owned source files after unsquashfs has produced them.
-tar -C "$EXTRACT_ROOTFS" -cf - . \
-    | tar -C "$ROOTFS" --no-same-owner --no-same-permissions -xf -
-
-# Build the TUI locally if the caller did not already do so.
 TUI_BIN="${VELDRA_PROJECT_ROOT}/tui/bin/veldra-tui"
 if [[ ! -x "$TUI_BIN" ]]; then
     vd_info "building Veldra TUI"
@@ -103,8 +89,6 @@ fi
 vd_info "installing Veldra TUI into the live rootfs"
 install -D -m 0755 "$TUI_BIN" "$ROOTFS/usr/local/bin/veldra-tui"
 
-# The Arch installation ISO already provides systemd. Add a dedicated live
-# user and autologin without invoking useradd/chroot or needing root.
 vd_info "configuring unprivileged Veldra live user"
 install -d -m 0755 "$ROOTFS/home/veldra"
 
@@ -143,7 +127,6 @@ fi
 EOF
 chmod 0644 "$ROOTFS/etc/profile.d/veldra.sh"
 
-# Keep an explicit identity marker for diagnostics inside this compatibility ISO.
 install -d -m 0755 "$ROOTFS/etc/veldra"
 cat > "$ROOTFS/etc/veldra/replit-build" <<EOF
 Veldra ${VERSION}
@@ -152,13 +135,10 @@ Base image: Arch Linux ${ARCH_RELEASE}
 EOF
 chmod 0644 "$ROOTFS/etc/veldra/replit-build"
 
-# Repack the rootfs as root-owned entries for a normal Arch live filesystem.
-# Ownership in the archive is metadata; the build itself remains unprivileged.
 vd_info "building modified airootfs.sfs"
 mksquashfs "$ROOTFS" "$NEW_SFS" -comp zstd -noappend -all-root -no-xattrs -no-progress
 [[ -s "$NEW_SFS" ]] || vd_die 1 "failed to build modified airootfs.sfs"
 
-# --- rewrite only the live filesystem inside the official ISO ---------------
 rm -f "$ISO"
 vd_info "rewriting Arch ISO boot image with Veldra live root"
 xorriso \
