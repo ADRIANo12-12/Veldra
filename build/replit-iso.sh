@@ -28,7 +28,7 @@ RUN_ID="${EPOCHSECONDS:-$(date +%s)}-${RANDOM}"
 ROOTFS="${WORK}/rootfs-${RUN_ID}"
 NEW_SFS="${WORK}/veldra-airootfs-${RUN_ID}.sfs"
 
-vd_require curl xorriso unsquashfs mksquashfs fakeroot sha256sum awk sed install mkdir rm du mv cat grep chmod
+vd_require curl xorriso unsquashfs mksquashfs fakeroot sha256sum awk sed install mkdir rm du mv cat grep chmod ln
 
 vd_info "Replit-compatible Veldra ISO builder — ${VERSION} / ${ARCH}"
 vd_warn "Sandbox compatibility path; canonical 'make iso' remains the Arch-container pipeline."
@@ -79,9 +79,8 @@ install -D -m 0755 "$TUI_BIN" "$ROOTFS/usr/local/bin/veldra-tui"
 vd_info "configuring Veldra live user"
 install -d -m 0755 "$ROOTFS/home/veldra"
 
-# Do not append directly to passwd/group/shadow. These files intentionally
-# have restrictive guest permissions (especially /etc/shadow). Build a new
-# inode in the writable /etc directory and atomically replace the old entry.
+# Replace the passwd/group/shadow entries atomically because these files can
+# intentionally be unreadable/writable by the build user after extraction.
 if ! grep -q '^veldra:' "$ROOTFS/etc/passwd"; then
     PASSWD_TMP="$ROOTFS/etc/.passwd.veldra.tmp"
     cat "$ROOTFS/etc/passwd" > "$PASSWD_TMP"
@@ -106,34 +105,80 @@ if [[ -f "$ROOTFS/etc/shadow" ]] && ! grep -q '^veldra:' "$ROOTFS/etc/shadow"; t
     mv -f "$SHADOW_TMP" "$ROOTFS/etc/shadow"
 fi
 
-install -d -m 0755 "$ROOTFS/etc/systemd/system/getty@tty1.service.d"
-cat > "$ROOTFS/etc/systemd/system/getty@tty1.service.d/veldra-autologin.conf" <<'EOF'
+# Do not depend on /etc/profile.d for starting the UI. The live console may be
+# serial (-nographic) or VGA/tty1 (-display curses). Start the UI directly on
+# each possible console through systemd, and let the active console win.
+vd_info "configuring Veldra console services"
+
+install -d -m 0755 "$ROOTFS/etc/systemd/system"
+
+cat > "$ROOTFS/etc/systemd/system/veldra-tui-tty1.service" <<'EOF'
+[Unit]
+Description=Veldra TUI on VGA tty1
+After=systemd-user-sessions.service
+Conflicts=getty@tty1.service
+
 [Service]
-ExecStart=
-ExecStart=-/usr/bin/agetty --autologin veldra --noclear %I $TERM
+Type=simple
+TTYPath=/dev/tty1
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=tty
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+ExecStart=/usr/local/bin/veldra-tui
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
-install -d -m 0755 "$ROOTFS/etc/systemd/system/serial-getty@ttyS0.service.d"
-cat > "$ROOTFS/etc/systemd/system/serial-getty@ttyS0.service.d/veldra-autologin.conf" <<'EOF'
+cat > "$ROOTFS/etc/systemd/system/veldra-tui-serial.service" <<'EOF'
+[Unit]
+Description=Veldra TUI on serial console
+After=systemd-user-sessions.service
+Conflicts=serial-getty@ttyS0.service
+
 [Service]
-ExecStart=
-ExecStart=-/usr/bin/agetty --autologin veldra --noclear --keep-baud %I 115200 linux
+Type=simple
+TTYPath=/dev/ttyS0
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=tty
+TTYReset=yes
+TTYVHangup=yes
+ExecStart=/usr/local/bin/veldra-tui
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
-install -d -m 0755 "$ROOTFS/etc/profile.d"
-cat > "$ROOTFS/etc/profile.d/veldra.sh" <<'EOF'
-if [[ -t 1 && "$(tty 2>/dev/null || true)" == "/dev/tty1" && -z "${VELDRA_TUI_ACTIVE:-}" ]]; then
-    export VELDRA_TUI_ACTIVE=1
-    exec /usr/local/bin/veldra-tui
-fi
-EOF
-chmod 0644 "$ROOTFS/etc/profile.d/veldra.sh"
+# The TUI owns the consoles in this live image, so disable the gettys that
+# would otherwise compete for the same TTYs. No init-time chroot/systemctl is
+# needed: these are ordinary systemd unit symlinks in the guest filesystem.
+ln -sfn /dev/null "$ROOTFS/etc/systemd/system/getty@tty1.service"
+ln -sfn /dev/null "$ROOTFS/etc/systemd/system/serial-getty@ttyS0.service"
+
+install -d -m 0755 "$ROOTFS/etc/systemd/system/multi-user.target.wants"
+ln -sfn ../veldra-tui-tty1.service \
+    "$ROOTFS/etc/systemd/system/multi-user.target.wants/veldra-tui-tty1.service"
+ln -sfn ../veldra-tui-serial.service \
+    "$ROOTFS/etc/systemd/system/multi-user.target.wants/veldra-tui-serial.service"
+
+# Remove the old shell-based launcher. The systemd units above are the single
+# source of truth for starting the TUI.
+rm -f "$ROOTFS/etc/profile.d/veldra.sh"
 
 install -d -m 0755 "$ROOTFS/etc/veldra"
 cat > "$ROOTFS/etc/veldra/replit-build" <<EOF
 Veldra ${VERSION}
 Build backend: replit-iso
 Base image: Arch Linux ${ARCH_RELEASE}
+Console backend: systemd tty1 + ttyS0
 EOF
 chmod 0644 "$ROOTFS/etc/veldra/replit-build"
 
