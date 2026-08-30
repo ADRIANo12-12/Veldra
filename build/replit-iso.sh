@@ -35,9 +35,10 @@ ARCH_ISO_SHA256="4e82dced1c4fd3e498b22a853f8db2a4d262d32b97e7e07d97390d9e425ffe5
 ARCH_ISO="${WORK}/${ARCH_ISO_NAME}"
 SOURCE_SFS="${WORK}/airootfs.sfs"
 ROOTFS="${WORK}/rootfs"
+WRITABLE_ROOTFS="${WORK}/rootfs-writable"
 NEW_SFS="${WORK}/veldra-airootfs.sfs"
 
-vd_require curl xorriso unsquashfs mksquashfs sha256sum awk sed install mkdir rm
+vd_require curl xorriso unsquashfs mksquashfs sha256sum awk sed install mkdir rm cp
 
 vd_info "Replit-compatible Veldra ISO builder — ${VERSION} / ${ARCH}"
 vd_warn "This is a sandbox compatibility build; canonical 'make iso' remains the normal Arch-container pipeline."
@@ -58,8 +59,6 @@ printf '%s  %s\n' "$ARCH_ISO_SHA256" "$ARCH_ISO" | sha256sum -c -
 vd_ok "Arch ISO checksum verified"
 
 # Archiso stores the live x86_64 filesystem at this stable path.
-# Keep discovery deterministic instead of relying on xorriso's find syntax,
-# which differs between hosted xorriso builds and is unnecessary here.
 SFS_PATH="/arch/x86_64/airootfs.sfs"
 vd_info "Arch live root: $SFS_PATH"
 
@@ -70,8 +69,8 @@ fi
 
 # --- extract and modify live rootfs -----------------------------------------
 rm -f "$SOURCE_SFS" "$NEW_SFS"
-rm -rf "$ROOTFS"
-mkdir -p "$ROOTFS"
+rm -rf "$ROOTFS" "$WRITABLE_ROOTFS"
+mkdir -p "$ROOTFS" "$WRITABLE_ROOTFS"
 
 vd_info "extracting Arch live rootfs"
 xorriso -osirrox on -indev "$ARCH_ISO" \
@@ -82,6 +81,14 @@ vd_info "unpacking Arch live rootfs without root"
 unsquashfs -no-xattrs -d "$ROOTFS" "$SOURCE_SFS" >/dev/null
 [[ -d "$ROOTFS/etc" && -d "$ROOTFS/usr" ]] || \
     vd_die 1 "extracted Arch rootfs does not look valid"
+
+# SquashFS stores the original ownership/mode bits. Rebuild a writable working
+# tree owned by the current Replit user, without requiring root/chown. GNU cp
+# can copy the readable tree while intentionally not preserving ownership.
+vd_info "creating writable rootfs working tree"
+cp -a --no-preserve=ownership "$ROOTFS/." "$WRITABLE_ROOTFS/"
+rm -rf "$ROOTFS"
+ROOTFS="$WRITABLE_ROOTFS"
 
 # Build the TUI locally if the caller did not already do so.
 TUI_BIN="${VELDRA_PROJECT_ROOT}/tui/bin/veldra-tui"
@@ -142,8 +149,8 @@ Base image: Arch Linux ${ARCH_RELEASE}
 EOF
 chmod 0644 "$ROOTFS/etc/veldra/replit-build"
 
-# A hosted sandbox may not preserve root ownership while unpacking SquashFS.
-# Repack as root:root so normal Arch file ownership is sane in the live image.
+# Repack the rootfs as root-owned entries for a normal Arch live filesystem.
+# Ownership in the archive is metadata; the build itself remains unprivileged.
 vd_info "building modified airootfs.sfs"
 mksquashfs "$ROOTFS" "$NEW_SFS" -comp zstd -noappend -all-root -no-xattrs -no-progress
 [[ -s "$NEW_SFS" ]] || vd_die 1 "failed to build modified airootfs.sfs"
