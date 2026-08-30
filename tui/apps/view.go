@@ -51,7 +51,8 @@ func (m *Model) viewTopBar() string {
 	}
 
 	now := time.Now().Format("15:04:05")
-	right := m.styles.BarRight.Render(fmt.Sprintf(" %s  %s  CPU %d%%  MEM %.0fM ", now, m.sysInfo.Hostname, m.sysInfo.CPUPercent, float64(m.sysInfo.MemTotal-m.sysInfo.MemAvailable)/1024))
+	memUsed := float64(m.sysInfo.MemTotal-m.sysInfo.MemAvailable) / 1024
+	right := m.styles.BarRight.Render(fmt.Sprintf(" %s  %s  %dC  MEM %.0fM ", now, m.sysInfo.Hostname, m.sysInfo.CPUCores, memUsed))
 	used := lipgloss.Width(left) + lipgloss.Width(workspaces) + lipgloss.Width(right)
 	gap := m.width - used
 	if gap < 1 { gap = 1 }
@@ -89,6 +90,7 @@ func (m *Model) viewSidebar(height, width int) string {
 		fmt.Sprintf("  Kernel  %s", m.sysInfo.Kernel),
 		fmt.Sprintf("  User    %s", m.sysInfo.CurrentUser),
 		fmt.Sprintf("  Shell   %s", m.sysInfo.Shell),
+		fmt.Sprintf("  Uptime  %s", m.sysInfo.Uptime),
 	)
 	body := strings.Join(lines, "\n")
 	return lipgloss.NewStyle().Width(width).Height(height).Padding(1, 1).Render(body)
@@ -123,6 +125,7 @@ func (m *Model) viewCompact() string {
 
 func clipLines(s string, maxLines, maxWidth int) string {
 	if maxLines < 1 { return "" }
+	if maxWidth < 1 { return "" }
 	var out []string
 	for _, line := range strings.Split(s, "\n") {
 		if len(out) >= maxLines { break }
@@ -134,22 +137,14 @@ func clipLines(s string, maxLines, maxWidth int) string {
 	return strings.Join(out, "\n")
 }
 
-// --- Application renderers --------------------------------------------------
-
 func (m *Model) viewApp() string {
 	switch m.active {
-	case AppTerminal:
-		return m.renderTerminal()
-	case AppFiles:
-		return m.renderFiles()
-	case AppEditor:
-		return m.renderEditor()
-	case AppSettings:
-		return m.renderSettings()
-	case AppTasks:
-		return m.renderTasks()
-	default:
-		return "unknown application"
+	case AppTerminal: return m.renderTerminal()
+	case AppFiles: return m.renderFiles()
+	case AppEditor: return m.renderEditor()
+	case AppSettings: return m.renderSettings()
+	case AppTasks: return m.renderTasks()
+	default: return "unknown application"
 	}
 }
 
@@ -192,11 +187,8 @@ func (m *Model) renderEditor() string {
 	start := m.edView.Top
 	for i := start; i < start+height && i < m.buf.Len(); i++ {
 		lineNo := fmt.Sprintf("%4d ", i+1)
-		if i == m.edView.CursorRow {
-			b.WriteString(m.styles.Selected.Render(lineNo+m.buf.Line(i))+"\n")
-		} else {
-			b.WriteString(m.styles.LineNo.Render(lineNo)+m.styles.File.Render(m.buf.Line(i))+"\n")
-		}
+		if i == m.edView.CursorRow { b.WriteString(m.styles.Selected.Render(lineNo+m.buf.Line(i))+"\n")
+		} else { b.WriteString(m.styles.LineNo.Render(lineNo)+m.styles.File.Render(m.buf.Line(i))+"\n") }
 	}
 	b.WriteString("\n"+m.styles.Help.Render("i insert  Ctrl-S save  arrows move  Esc view  3 editor workspace"))
 	return b.String()
@@ -215,9 +207,7 @@ func (m *Model) renderSettings() string {
 	b.WriteString(row("Shell", info.Shell))
 	b.WriteString("\n"+m.styles.Section.Render("NETWORK")+"\n")
 	if len(info.Interfaces) == 0 { b.WriteString(row("Interfaces", "none")) }
-	for _, n := range info.Interfaces {
-		b.WriteString(row(n.Name, fmt.Sprintf("%s (%s)", n.State, strings.Join(n.Addresses, ", "))))
-	}
+	for _, n := range info.Interfaces { b.WriteString(row(n.Name, fmt.Sprintf("%s (%s)", n.State, strings.Join(n.Addresses, ", ")))) }
 	return b.String()
 }
 
@@ -227,9 +217,8 @@ func (m *Model) renderTasks() string {
 	var b strings.Builder
 	b.WriteString(m.styles.TableHeader.Render(fmt.Sprintf("%-7s %-7s %-8s %-10s %s", "PID", "PPID", "CPU", "RAM", "PROCESS"))+"\n")
 	b.WriteString(m.styles.Divider.Render(strings.Repeat("─", 72))+"\n")
-	for _, p := range m.lastTask {
-		b.WriteString(fmt.Sprintf("%-7d %-7d %-8s %-10s %s", p.PID, p.PPID, fmt.Sprintf("%.1f%%", p.CPU), safef(p.RSS), p.Name)+"\n")
-	}
+	for _, p := range m.lastTask { b.WriteString(fmt.Sprintf("%-7d %-7d %-8s %-10s %s", p.PID, p.PPID, fmt.Sprintf("%.1f%%", p.CPU), safef(p.RSS), p.Name)+"\n") }
+	b.WriteString("\n"+m.styles.Help.Render("Processes are read from /proc and refreshed every second. Press 5 to focus Tasks."))
 	return b.String()
 }
 
