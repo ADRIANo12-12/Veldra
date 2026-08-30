@@ -28,7 +28,7 @@ RUN_ID="${EPOCHSECONDS:-$(date +%s)}-${RANDOM}"
 ROOTFS="${WORK}/rootfs-${RUN_ID}"
 NEW_SFS="${WORK}/veldra-airootfs-${RUN_ID}.sfs"
 
-vd_require curl xorriso unsquashfs mksquashfs fakeroot sha256sum awk sed install mkdir rm du
+vd_require curl xorriso unsquashfs mksquashfs fakeroot sha256sum awk sed install mkdir rm du mv cat grep chmod
 
 vd_info "Replit-compatible Veldra ISO builder — ${VERSION} / ${ARCH}"
 vd_warn "Sandbox compatibility path; canonical 'make iso' remains the Arch-container pipeline."
@@ -63,9 +63,6 @@ xorriso -osirrox on -indev "$ARCH_ISO" \
 [[ -s "$SOURCE_SFS" ]] || vd_die 1 "failed to extract $SFS_PATH"
 
 vd_info "unpacking Arch live rootfs with fakeroot"
-# SquashFS 4.7.5 already supports the creator-side -all-root option. We do not
-# require the newer 4.7.6 unsquashfs permission flags: fakeroot virtualises the
-# ownership/mode changes made while extracting the original Arch filesystem.
 fakeroot -- unsquashfs -no-xattrs -d "$ROOTFS" "$SOURCE_SFS" >/dev/null
 [[ -d "$ROOTFS/etc" && -d "$ROOTFS/usr" ]] || \
     vd_die 1 "extracted Arch rootfs does not look valid"
@@ -82,14 +79,31 @@ install -D -m 0755 "$TUI_BIN" "$ROOTFS/usr/local/bin/veldra-tui"
 vd_info "configuring Veldra live user"
 install -d -m 0755 "$ROOTFS/home/veldra"
 
+# Do not append directly to passwd/group/shadow. These files intentionally
+# have restrictive guest permissions (especially /etc/shadow). Build a new
+# inode in the writable /etc directory and atomically replace the old entry.
 if ! grep -q '^veldra:' "$ROOTFS/etc/passwd"; then
-    printf '%s\n' 'veldra:x:1000:1000:Veldra Live User:/home/veldra:/bin/bash' >> "$ROOTFS/etc/passwd"
+    PASSWD_TMP="$ROOTFS/etc/.passwd.veldra.tmp"
+    cat "$ROOTFS/etc/passwd" > "$PASSWD_TMP"
+    printf '%s\n' 'veldra:x:1000:1000:Veldra Live User:/home/veldra:/bin/bash' >> "$PASSWD_TMP"
+    chmod 0644 "$PASSWD_TMP"
+    mv -f "$PASSWD_TMP" "$ROOTFS/etc/passwd"
 fi
+
 if ! grep -q '^veldra:' "$ROOTFS/etc/group"; then
-    printf '%s\n' 'veldra:x:1000:' >> "$ROOTFS/etc/group"
+    GROUP_TMP="$ROOTFS/etc/.group.veldra.tmp"
+    cat "$ROOTFS/etc/group" > "$GROUP_TMP"
+    printf '%s\n' 'veldra:x:1000:' >> "$GROUP_TMP"
+    chmod 0644 "$GROUP_TMP"
+    mv -f "$GROUP_TMP" "$ROOTFS/etc/group"
 fi
+
 if [[ -f "$ROOTFS/etc/shadow" ]] && ! grep -q '^veldra:' "$ROOTFS/etc/shadow"; then
-    printf '%s\n' 'veldra:!:19700:0:99999:7:::' >> "$ROOTFS/etc/shadow"
+    SHADOW_TMP="$ROOTFS/etc/.shadow.veldra.tmp"
+    cat "$ROOTFS/etc/shadow" > "$SHADOW_TMP"
+    printf '%s\n' 'veldra:!:19700:0:99999:7:::' >> "$SHADOW_TMP"
+    chmod 0640 "$SHADOW_TMP"
+    mv -f "$SHADOW_TMP" "$ROOTFS/etc/shadow"
 fi
 
 install -d -m 0755 "$ROOTFS/etc/systemd/system/getty@tty1.service.d"
