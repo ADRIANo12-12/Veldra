@@ -1,0 +1,50 @@
+# Veldra — isolated Arch Linux build environment
+#
+# Veldra
+# Copyright (c) 2026 Adrian Sikora
+# All rights reserved.
+# Proprietary and confidential.
+#
+# Veldra is Arch-based and the ISO is produced with Arch-only tooling
+# (pacman, arch-chroot, grub-mkrescue, xorriso). Those tools never need to
+# be installed on the developer's host: this image is the reproducible
+# place where every Arch-specific build step runs.
+#
+# The host only needs a container runtime (Podman or Docker). The built
+# image stays Arch Linux — this is not a re-base, it is an isolated build
+# environment for the existing Arch-native pipeline.
+#
+# Build (normally done automatically by build/container/run.sh):
+#   podman build -t veldra-arch-builder:latest -f Containerfile .
+#
+# The base is Arch rolling by default; pin a digest when you need a locked
+# base:  --build-arg VELDRA_ARCH_BASE=archlinux@sha256:...
+
+ARG VELDRA_ARCH_BASE=archlinux:latest
+FROM ${VELDRA_ARCH_BASE}
+
+# Full Arch build toolchain, plus Go for building the Veldra TUI inside the
+# build environment. systemd is used for chroot configuration
+# (systemctl --root), util-linux for mountpoint. mtools is required by
+# grub-mkrescue to stamp the FAT EFI image. base-devel keeps makepkg-based
+# PKGBUILD builds working inside the same environment.
+RUN pacman -Syu --noconfirm --needed \
+        base-devel \
+        arch-install-scripts \
+        grub \
+        libisoburn \
+        mtools \
+        squashfs-tools \
+        python \
+        git \
+        go \
+        systemd \
+        util-linux \
+        zstd \
+    && pacman -Scc --noconfirm
+
+# Marks this image as the Veldra Arch build environment so build scripts
+# know they are already inside the correct gated context.
+ENV VELDRA_IN_ARCH_CONTAINER=1
+
+WORKDIR /veldra

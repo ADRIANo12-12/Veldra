@@ -1,0 +1,116 @@
+VELDRA SOFTWARE LICENSE
+Version 1.0 — 2026
+========================================================================
+
+Copyright (c) 2026 Adrian Sikora
+All rights reserved.
+
+Contact:    adriangithub@proton.me
+Repository: https://github.com/ADRIANo12-12/Veldra.git
+
+Veldra and associated project assets are proprietary. The project and
+company rights holder designation is Phantom Systems (TM) as specified
+by the project owner.
+
+This license is PROVIDED WITHOUT ANY TRADEMARK REGISTRATION CLAIM other
+than as expressly stated below. Nothing in this license constitutes a
+claim that any trademark has been legally registered.
+
+1. PROPRIETARY SOFTWARE
+   -----------------------------------------------------------------------
+
+   Veldra, including the entirety of its original material (source code,
+   build system, Go TUI applications, configuration, theming, branding,
+   artwork, packaging, installer, and documentation) is proprietary,
+   closed-source software. It is protected by copyright law and
+   international treaty provisions. "Veldra" and the Veldra name and
+   visual identity are used as designations of the project owner,
+   Adrian Sikora, and of Phantom Systems (TM).
+
+2. OWNERSHIP
+   -----------------------------------------------------------------------
+
+   The Software and all original components and derivative works thereof
+   are the exclusive property of Adrian Sikora ("Licensor").
+
+3. GRANT OF LIMITED LICENSE
+   -----------------------------------------------------------------------
+
+   The Licensor grants any person or entity receiving a copy of the
+   Software ("Licensee") a limited, revocable, non-exclusive,
+   non-transferable license to:
+
+     (a) view, read, study, and evaluate the Software; and
+     (b) install and use unmodified copies of the Software for private,
+         non-commercial purposes.
+
+   The Licensee may NOT, without the prior express written permission of
+   the Licensor:
+
+     (a) redistribute the Software, or any portion of it, whether in
+         original or modified form, in whole or in part, as part of any
+         other distribution, product, or service;
+     (b) copy, modify, adapt, translate, port, or create derivative works
+         of the Software, including the modification of branding, logos,
+         or version identifiers;
+     (c) sell, rent, lease, sublicense, assign, or otherwise transfer any
+         rights under this license;
+     (d) remove, alter, or obscure any copyright, trademark, attribution,
+         or license notices contained in or on the Software; or
+     (e) use the Software or any portion of it for commercial purposes.
+
+   No other rights, express or implied, are granted.
+
+4. THIRD-PARTY AND OPEN-SOURCE COMPONENTS
+   -----------------------------------------------------------------------
+
+   Veldra is built on top of Arch Linux, the Linux kernel, and many
+   third-party open-source packages. Those components are NOT covered by
+   this license and remain under their respective licenses (GPL, BSD,
+   MIT, Apache, and others). Nothing in this license alters, limits, or
+   extends the rights and obligations that apply to third-party
+   components. The Go TUI is built on the Bubble Tea and Lip Gloss
+   libraries, which are distributed under the MIT license and remain the
+   property of their respective authors. See `docs/licensing.md` in the
+   repository for the full licensing boundary and third-party
+   attribution.
+
+5. NO WARRANTY
+   -----------------------------------------------------------------------
+
+   The Software is provided "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   express or implied, including but not limited to the warranties of
+   merchantability, fitness for a particular purpose, and
+   non-infringement. The entire risk arising out of the use of the
+   Software remains with the Licensee.
+
+6. LIMITATION OF LIABILITY
+   -----------------------------------------------------------------------
+
+   To the maximum extent permitted by law, the Licensor shall not be
+   liable for any damages arising out of or in connection with the use
+   or inability to use the Software, even if advised of the possibility
+   of such damages.
+
+7. TERMINATION
+   -----------------------------------------------------------------------
+
+   This license is effective until terminated. It terminates
+   automatically without notice upon any breach of its terms. Upon
+   termination the Licensee must cease all use and destroy all copies of
+   the Software.
+
+8. GENERAL
+   -----------------------------------------------------------------------
+
+   This license is the entire agreement between the parties regarding the
+   Software and supersedes any prior agreements. Any provision found
+   unenforceable will be enforced to the maximum extent possible, and the
+   remaining provisions continue in full force. This license is subject
+   to the laws of the Republic of Poland and, to the extent applicable
+   internationally, the Berne Convention for the Protection of Literary
+   and Artistic Works.
+
+------------------------------------------------------------------------------
+END OF LICENSE
+------------------------------------------------------------------------------

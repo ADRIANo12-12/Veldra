@@ -1,0 +1,32 @@
+# Veldra — git ignore rules.
+#
+# Veldra
+# Copyright (c) 2026 Adrian Sikora
+# All rights reserved.
+# Proprietary and confidential.
+
+# build artifacts (outputs and work dirs only; build scripts stay tracked)
+build/work/
+build/out/
+build/iso/
+build/pacman-cache/
+*.iso
+*.tar.zst
+*.sfs
+
+# local tool binaries
+tui/bin/
+bin/
+pkg/
+
+# logs and scratch
+*.log
+*~ /tmp/
+
+# editor / OS noise
+.gopls/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

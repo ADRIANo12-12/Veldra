@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# /etc/initcpio/install/veldra-live
+#
+# Veldra
+# Copyright (c) 2026 Adrian Sikora
+# All rights reserved.
+# Proprietary and confidential.
+#
+# mkinitcpio install function for the Veldra live hook. add_runscript
+# places the hook script into the image as /hooks/veldra-live and registers
+# its run_hook for the runtime phase — without it the hook is built but
+# never packaged, and the image boots with only the stock hooks.
+
+build() {
+    add_runscript
+}
+
+help() {
+    cat <<'HELPEOF'
+This hook makes the image a Veldra live boot image. It locates the boot
+media, mounts the squashfs live filesystem, builds a writable OverlayFS
+and switches to it.
+HELPEOF
+}

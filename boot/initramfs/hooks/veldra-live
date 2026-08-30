@@ -1,0 +1,114 @@
+#!/usr/bin/ash
+# /etc/initcpio/hooks/veldra-live
+#
+# Veldra
+# Copyright (c) 2026 Adrian Sikora
+# All rights reserved.
+# Proprietary and confidential.
+#
+# Live boot hook for mkinitcpio. Engaged by the Veldra live initramfs
+# (mkinitcpio-veldra.conf). It hands the final root mounting to
+# veldra_live_mount_handler, which:
+#   1. locates the Veldra boot media (ISO) by label, then by scanning,
+#   2. mounts the ISO9660 media,
+#   3. mounts live.sfs (the squashfs live filesystem) via loop,
+#   4. creates a tmpfs overlay (upper+work) for a writable live root,
+#   5. mounts the OverlayFS as the real root.
+#
+# On any failure a readable error is printed and a recovery (interactive)
+# shell is offered — never a silent hang.
+
+run_hook() {
+    # Everything is deferred to the mount_handler phase, after udev/block
+    # have populated the device nodes.
+    mount_handler=veldra_live_mount_handler
+}
+
+veldra_live_find_iso() {
+    local dev mountdir
+    mountdir=/run/veldra-mnt
+
+    # Preferred: the ISO volume label (set by grub-mkrescue -volid VELDRA).
+    if [ -e /dev/disk/by-label/VELDRA ]; then
+        printf '%s\n' "/dev/disk/by-label/VELDRA"
+        return 0
+    fi
+
+    # Fallback: scan candidate block devices for our live media signature.
+    # Getting a mounted CD-like device right matters more than speed here.
+    for dev in \
+        /dev/sr[0-9] /dev/cdrom[0-9] /dev/cdrom \
+        /dev/loop[0-9] /dev/loop[0-9][0-9] \
+        /dev/vd[a-z] /dev/sd[a-z] /dev/hd[a-z] \
+        /dev/mmcblk[0-9] /dev/nvme[0-9]n[0-9] \
+        /dev/disk/by-id/*; do
+
+        [ -b "$dev" ] || continue
+
+        if mount -t iso9660 -o ro "$dev" "$mountdir" 2>/dev/null; then
+            if [ -e "$mountdir/live.sfs" ] && [ -e "$mountdir/boot/vmlinuz-linux" ]; then
+                printf '%s\n' "$dev"
+                umount "$mountdir" 2>/dev/null || true
+                return 0
+            fi
+            umount "$mountdir" 2>/dev/null || true
+        fi
+    done
+    return 1
+}
+
+veldra_live_mount_handler() {
+    local iso
+
+    mkdir -p /run/veldra-iso /run/veldra-sfs /run/veldra-overlay /run/veldra-mnt
+
+    iso="$(veldra_live_find_iso)" || {
+        err "Veldra live: could not locate the Veldra boot media."
+        err "Bailing out, you are on your own. Good luck."
+        launch_interactive_shell --exec
+    }
+
+    msg ":: Veldra live: mounting boot media [$iso]"
+    if ! mount -t iso9660 -o ro "$iso" /run/veldra-iso; then
+        err "Veldra live: failed to mount the boot media [$iso]."
+        launch_interactive_shell --exec
+    fi
+
+    if [ ! -e /run/veldra-iso/live.sfs ]; then
+        err "Veldra live: live.sfs not found on the boot media."
+        err "The ISO is incomplete; rebuild it with:  make iso"
+        launch_interactive_shell --exec
+    fi
+
+    msg ":: Veldra live: mounting squashfs [live.sfs]"
+    if ! mount -t squashfs -o loop,ro /run/veldra-iso/live.sfs /run/veldra-sfs; then
+        err "Veldra live: failed to mount the squashfs live filesystem."
+        launch_interactive_shell --exec
+    fi
+
+    msg ":: Veldra live: creating writable overlay"
+    if ! mount -t tmpfs -o mode=0755 tmpfs /run/veldra-overlay; then
+        err "Veldra live: failed to mount the overlay upper layer."
+        launch_interactive_shell --exec
+    fi
+
+    # OverlayFS: lower = squashfs, upper/work = tmpfs -> writable live root.
+    # The kernel demands upperdir and workdir share ONE filesystem AND stay
+    # separate subtrees (neither nested inside the other). Both are siblings
+    # inside the single overlay tmpfs; a workdir on the initramfs ramfs is
+    # refused ("bad superblock") and a workdir nested under upperdir is
+    # refused too ("workdir and upperdir must be separate subtrees").
+    if ! mkdir -p /run/veldra-overlay/upper /run/veldra-overlay/work; then
+        err "Veldra live: failed to create the overlay upper/work directories."
+        launch_interactive_shell --exec
+    fi
+
+    if ! mount -t overlay overlay \
+        -o "lowerdir=/run/veldra-sfs,upperdir=/run/veldra-overlay/upper,workdir=/run/veldra-overlay/work" \
+        "$1"; then
+        err "Veldra live: failed to mount the OverlayFS root."
+        launch_interactive_shell --exec
+    fi
+
+    msg ":: Veldra live: root overlay ready"
+}

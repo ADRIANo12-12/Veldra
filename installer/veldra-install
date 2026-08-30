@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# installer/veldra-install — install Veldra onto a target disk.
+#
+# Veldra
+# Copyright (c) 2026 Adrian Sikora
+# All rights reserved.
+# Proprietary and confidential.
+#
+# The Veldra installer. A real, incremental Arch installer:
+#   select disk -> partition -> format -> mount -> pacstrap ->
+#   stage Veldra layers -> configure (locale, users, network) ->
+#   initramfs + GRUB.
+#
+# It is non-destructive until you explicitly confirm the disk wipe, and it
+# never guesses: every destructive step asks first. Set the VD_* variables
+# (see below) to run hands-free for automation.
+#
+#   --disk /dev/sdX     target disk (default: interactive)
+#   --user NAME         primary user to create
+#   --hostname NAME     hostname (default: veldra)
+#   --skip-chroot       only pacstrap + stage layers (no grub/initramfs)
+#   --help              this text
+#
+# Environment (hands-free mode):
+#   VD_DISK VD_USER VD_USER_PASSWD VD_ROOT_PASSWD VD_HOSTNAME VD_TIMEZONE
+#   VD_LOCALE VD_PART_MODE(msdos|gpt-efi|gpt-only) VD_SKIP_CHROOT
+
+set -euo pipefail
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=installer/lib-install.sh
+# shellcheck disable=SC1091
+source "${SELF_DIR}/lib-install.sh"
+
+VD_SRC=""
+VD_DISK_ARG=""
+VD_SKIP_CHROOT="${VD_SKIP_CHROOT:-0}"
+VD_PART_MODE="${VD_PART_MODE:-auto}"
+VD_USER="${VD_USER:-}"
+VD_USER_PASSWD="${VD_USER_PASSWD:-}"
+VD_ROOT_PASSWD="${VD_ROOT_PASSWD:-}"
+VD_HOSTNAME="${VD_HOSTNAME:-veldra}"
+VD_TIMEZONE="${VD_TIMEZONE:-UTC}"
+VD_LOCALE="${VD_LOCALE:-en_US.UTF-8}"
+
+usage() {
+    sed -n 's/^#   //p' "${BASH_SOURCE[0]}" | sed -n '/--help/,$p'
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --disk) VD_DISK_ARG="${2:-}"; shift 2 ;;
+        --user) VD_USER="${2:-}"; shift 2 ;;
+        --hostname) VD_HOSTNAME="${2:-}"; shift 2 ;;
+        --skip-chroot) VD_SKIP_CHROOT=1; shift ;;
+        --help|-h) usage; exit 0 ;;
+        *) vd_die 1 "unknown option '$1' (see --help)" ;;
+    esac
+done
+
+vd_install_prereqs
+vd_install_src_require VD_SRC
+
+VERSION="$("${VD_SRC}/scripts/version.sh" show)"
+vd_info "Veldra installer — $VERSION (install source: $VD_SRC)"
+printf 'Plan:\n  install source : %s\n  hostname       : %s\n  timezone       : %s\n  locale         : %s\n  user           : %s\n' \
+    "$VD_SRC" "$VD_HOSTNAME" "$VD_TIMEZONE" "$VD_LOCALE" "${VD_USER:-(none)}"
+
+# --- 1. disk ---------------------------------------------------------------
+if [[ -n "${VD_DISK:-}" ]]; then
+    [[ -b "$VD_DISK" ]] || vd_die 1 "not a block device: $VD_DISK"
+    VD_TARGET_DISK="$VD_DISK"
+    lsblk "$VD_TARGET_DISK" 2>/dev/null | sed 's/^/  /'
+    if ! vd_confirm "THIS WILL ERASE EVERYTHING ON $VD_TARGET_DISK. Continue?"; then
+        vd_die 0 "aborted."
+    fi
+else
+    vd_choose_disk "$VD_DISK_ARG"
+fi
+
+# --- 2. partition -----------------------------------------------------------
+MNT="/mnt/veldra"
+mkdir -p "$MNT"
+if mountpoint -q "$MNT"; then
+    vd_error "$MNT is already a mountpoint — unmount it first"
+    exit 2
+fi
+
+case "$VD_PART_MODE" in
+    msdos)   VD_PART_MODE=msdos; VD_EFI=no ;;
+    gpt-efi) VD_PART_MODE=gpt;   VD_EFI=yes ;;
+    gpt-only) VD_PART_MODE=gpt;  VD_EFI=no ;;
+    auto)    VD_PART_MODE=gpt;   VD_EFI=auto ;;
+    *) vd_die 1 "invalid VD_PART_MODE '$VD_PART_MODE'" ;;
+esac
+
+vd_partition_disk "$VD_TARGET_DISK" "$VD_PART_MODE" "$VD_EFI"
+partprobe "$VD_TARGET_DISK" 2>/dev/null || sleep 2
+
+vd_mkfs
+vd_mount_target "$MNT"
+
+# --- 3. base + layers -------------------------------------------------------
+vd_pacstrap_base "$MNT"
+vd_gen_fstab "$MNT"
+vd_stage_layers "$MNT" "$VD_SRC" "$VD_USER"
+
+# --- 4. configuration + bootloader -----------------------------------------
+if (( VD_SKIP_CHROOT )); then
+    vd_warn "--skip-chroot: initramfs/bootloader/users were skipped"
+else
+    vd_chroot_configure "$MNT"
+    vd_install_grub "$MNT"
+fi
+
+vd_install_cleanup "$MNT"
+
+echo
+echo "Veldra installation complete."
+echo "  Target: $VD_TARGET_DISK (root: ${VD_PART_ROOT:-?})"
+echo "  Reboot into the installed system to finish."
+echo
+exit 0

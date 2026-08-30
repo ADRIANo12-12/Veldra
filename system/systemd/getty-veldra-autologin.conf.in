@@ -1,0 +1,17 @@
+# /etc/systemd/system/getty@tty1.service.d/veldra-autologin.conf.in
+#
+# Veldra
+# Copyright (c) 2026 Adrian Sikora
+# All rights reserved.
+# Proprietary and confidential.
+#
+# Enables automatic login on the primary text console so the Veldra TUI
+# starts as the first interactive environment after boot. @USER@ is
+# substituted by the Veldra install/live setup scripts.
+#
+# Because this is a drop-in that replaces ExecStart, the normal Ctrl+Alt+F2
+# still gives a clean getty at tty2, so a plain shell remains reachable.
+
+[Service]
+ExecStart=
+ExecStart=-/usr/bin/agetty --autologin @USER@ --noclear %I $TERM
