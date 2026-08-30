@@ -36,9 +36,6 @@ const (
 var appLabels = []string{"Terminal", "Files", "Editor", "Settings", "Tasks"}
 var ansiSequence = regexp.MustCompile("\\x1b\\[[0-9;?]*[ -/]*[@-~]")
 
-// paletteAction is deliberately small: the palette is command-oriented, not
-// another application. This keeps the interaction model close to a modern
-// keyboard-first terminal editor.
 type paletteAction struct {
     Label string
     Hint  string
@@ -61,29 +58,30 @@ type Model struct {
     height int
     ready  bool
 
-    sysInfo   system.Info
-    fs        *files.Browser
-    buf       *editor.Buffer
-    edView    editor.ViewWindow
-    tasks     *taskmanager.Collector
-    lastTask  []taskmanager.Process
+    sysInfo  system.Info
+    fs       *files.Browser
+    buf      *editor.Buffer
+    edView   editor.ViewWindow
+    tasks    *taskmanager.Collector
+    lastTask []taskmanager.Process
 
     insertMode bool
 
-    cwd              string
-    previousCWD      string
-    terminalInput    []rune
-    terminalCursor   int
-    terminalHistory  []string
-    terminalHistoryI int
-    terminalScratch  []rune
-    terminalOut      []string
-    terminalRunning  bool
-    terminalStatus   string
+    cwd             string
+    previousCWD     string
+    terminalInput   []rune
+    terminalCursor  int
+    terminalHistory []string
+    historyIndex    int
+    terminalScratch []rune
+    terminalOut     []string
+    terminalRunning bool
+    terminalStatus  string
 
-    paletteOpen   bool
-    paletteInput  []rune
-    paletteCursor int
+    paletteOpen        bool
+    paletteInput       []rune
+    paletteInputCursor int
+    paletteIndex        int
 
     quitting bool
     errMsg   string
@@ -99,10 +97,10 @@ func NewModel(startDir, startFile string) *Model {
         }
     }
     m := &Model{
-        theme:        ui.VeldraDark(),
-        active:       AppTerminal,
-        cwd:          startDir,
-        sysInfo:      system.Current(),
+        theme:  ui.VeldraDark(),
+        active: AppTerminal,
+        cwd:    startDir,
+        sysInfo: system.Current(),
         terminalOut: []string{
             "Veldra Shell 0.0.1-pre-alpha",
             "Type a command. Ctrl+P opens the command palette.",
@@ -205,14 +203,10 @@ func (m *Model) handleTerminalKey(km tea.KeyMsg) tea.Cmd {
         m.deleteTerminalRune(1)
         return nil
     case "left":
-        if m.terminalCursor > 0 {
-            m.terminalCursor--
-        }
+        if m.terminalCursor > 0 { m.terminalCursor-- }
         return nil
     case "right":
-        if m.terminalCursor < len(m.terminalInput) {
-            m.terminalCursor++
-        }
+        if m.terminalCursor < len(m.terminalInput) { m.terminalCursor++ }
         return nil
     case "home":
         m.terminalCursor = 0
@@ -229,6 +223,7 @@ func (m *Model) handleTerminalKey(km tea.KeyMsg) tea.Cmd {
     case "esc":
         m.terminalInput = nil
         m.terminalCursor = 0
+        m.historyIndex = 0
         return nil
     }
     if km.Type == tea.KeyRunes && len(km.Runes) > 0 {
@@ -244,21 +239,18 @@ func (m *Model) insertTerminalRunes(rs []rune) {
     next = append(next, m.terminalInput[m.terminalCursor:]...)
     m.terminalInput = next
     m.terminalCursor += len(rs)
+    m.historyIndex = 0
 }
 
 func (m *Model) deleteTerminalRune(direction int) {
     if direction < 0 {
-        if m.terminalCursor == 0 {
-            return
-        }
+        if m.terminalCursor == 0 { return }
         i := m.terminalCursor - 1
         m.terminalInput = append(m.terminalInput[:i], m.terminalInput[m.terminalCursor:]...)
         m.terminalCursor--
         return
     }
-    if m.terminalCursor >= len(m.terminalInput) {
-        return
-    }
+    if m.terminalCursor >= len(m.terminalInput) { return }
     m.terminalInput = append(m.terminalInput[:m.terminalCursor], m.terminalInput[m.terminalCursor+1:]...)
 }
 
@@ -266,19 +258,14 @@ func (m *Model) acceptTerminalInput() tea.Cmd {
     command := strings.TrimSpace(string(m.terminalInput))
     m.terminalInput = nil
     m.terminalCursor = 0
-    m.terminalHistoryI = 0
+    m.historyIndex = 0
     m.terminalScratch = nil
-    if command == "" || m.terminalRunning {
-        return nil
-    }
+    if command == "" || m.terminalRunning { return nil }
 
     m.terminalHistory = append(m.terminalHistory, command)
     m.terminalOut = append(m.terminalOut, m.prompt()+" "+command)
     m.trimTerminalOutput()
-
-    if handled, cmd := m.handleBuiltin(command); handled {
-        return cmd
-    }
+    if handled, cmd := m.handleBuiltin(command); handled { return cmd }
 
     m.terminalRunning = true
     m.terminalStatus = "running"
@@ -287,15 +274,11 @@ func (m *Model) acceptTerminalInput() tea.Cmd {
 
 func (m *Model) handleBuiltin(command string) (bool, tea.Cmd) {
     fields := strings.Fields(command)
-    if len(fields) == 0 {
-        return true, nil
-    }
+    if len(fields) == 0 { return true, nil }
     switch fields[0] {
     case "cd":
         target := "~"
-        if len(fields) > 1 {
-            target = strings.Join(fields[1:], " ")
-        }
+        if len(fields) > 1 { target = strings.Join(fields[1:], " ") }
         return true, m.changeDirectory(target)
     case "pwd":
         m.terminalOut = append(m.terminalOut, m.cwd)
@@ -315,8 +298,9 @@ func (m *Model) handleBuiltin(command string) (bool, tea.Cmd) {
     case "exit":
         m.quitting = true
         return true, nil
+    default:
+        return false, nil
     }
-    return false, nil
 }
 
 func (m *Model) changeDirectory(target string) tea.Cmd {
@@ -326,12 +310,11 @@ func (m *Model) changeDirectory(target string) tea.Cmd {
             expanded = filepath.Join(home, strings.TrimPrefix(expanded, "~/"))
         }
     } else if expanded == "-" {
-        if m.previousCWD != "" {
-            expanded = m.previousCWD
-        } else {
+        if m.previousCWD == "" {
             m.terminalOut = append(m.terminalOut, "cd: OLDPWD not set")
             return nil
         }
+        expanded = m.previousCWD
     } else if !filepath.IsAbs(expanded) {
         expanded = filepath.Join(m.cwd, expanded)
     }
@@ -343,11 +326,7 @@ func (m *Model) changeDirectory(target string) tea.Cmd {
     }
     info, err := os.Stat(clean)
     if err != nil || !info.IsDir() {
-        if err != nil {
-            m.terminalOut = append(m.terminalOut, "cd: "+err.Error())
-        } else {
-            m.terminalOut = append(m.terminalOut, "cd: not a directory: "+clean)
-        }
+        if err != nil { m.terminalOut = append(m.terminalOut, "cd: "+err.Error()) } else { m.terminalOut = append(m.terminalOut, "cd: not a directory: "+clean) }
         m.trimTerminalOutput()
         return nil
     }
@@ -364,62 +343,41 @@ func runTerminalCommand(dir, command string) tea.Cmd {
         start := time.Now()
         cmd := exec.Command("bash", "-lc", command)
         cmd.Dir = dir
-        cmd.Env = append(os.Environ(),
-            "TERM=xterm-256color",
-            "COLORTERM=truecolor",
-            "PAGER=cat",
-            "GIT_PAGER=cat",
-            "MANPAGER=cat",
-        )
+        cmd.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor", "PAGER=cat", "GIT_PAGER=cat", "MANPAGER=cat")
         out, err := cmd.CombinedOutput()
         return terminalResultMsg{Output: string(out), Err: err, Duration: time.Since(start)}
     }
 }
 
 func (m *Model) historyUp() {
-    if len(m.terminalHistory) == 0 || m.terminalRunning {
-        return
-    }
-    if m.terminalHistoryI == 0 {
-        m.terminalScratch = append([]rune(nil), m.terminalInput...)
-    }
-    if m.terminalHistoryI < len(m.terminalHistory) {
-        m.terminalHistoryI++
-    }
-    m.terminalInput = []rune(m.terminalHistory[len(m.terminalHistory)-m.terminalHistoryI])
+    if len(m.terminalHistory) == 0 || m.terminalRunning { return }
+    if m.historyIndex == 0 { m.terminalScratch = append([]rune(nil), m.terminalInput...) }
+    if m.historyIndex < len(m.terminalHistory) { m.historyIndex++ }
+    m.terminalInput = []rune(m.terminalHistory[len(m.terminalHistory)-m.historyIndex])
     m.terminalCursor = len(m.terminalInput)
 }
 
 func (m *Model) historyDown() {
-    if m.terminalHistoryI == 0 {
-        return
-    }
-    m.terminalHistoryI--
-    if m.terminalHistoryI == 0 {
-        m.terminalInput = append([]rune(nil), m.terminalScratch...)
-    } else {
-        m.terminalInput = []rune(m.terminalHistory[len(m.terminalHistory)-m.terminalHistoryI])
-    }
+    if m.historyIndex == 0 { return }
+    m.historyIndex--
+    if m.historyIndex == 0 { m.terminalInput = append([]rune(nil), m.terminalScratch...) } else { m.terminalInput = []rune(m.terminalHistory[len(m.terminalHistory)-m.historyIndex]) }
     m.terminalCursor = len(m.terminalInput)
 }
 
 func (m *Model) trimTerminalOutput() {
     const maxLines = 600
-    if len(m.terminalOut) > maxLines {
-        m.terminalOut = m.terminalOut[len(m.terminalOut)-maxLines:]
-    }
+    if len(m.terminalOut) > maxLines { m.terminalOut = m.terminalOut[len(m.terminalOut)-maxLines:] }
 }
 
-func cleanOutput(s string) string {
-    return ansiSequence.ReplaceAllString(s, "")
-}
+func cleanOutput(s string) string { return ansiSequence.ReplaceAllString(s, "") }
 
 func (m *Model) handlePaletteKey(km tea.KeyMsg) tea.Cmd {
     switch km.String() {
     case "esc", "ctrl+p":
         m.paletteOpen = false
         m.paletteInput = nil
-        m.paletteCursor = 0
+        m.paletteInputCursor = 0
+        m.paletteIndex = 0
         return nil
     case "up":
         m.movePalette(-1)
@@ -430,29 +388,31 @@ func (m *Model) handlePaletteKey(km tea.KeyMsg) tea.Cmd {
     case "enter":
         return m.runPaletteSelection()
     case "backspace":
-        if len(m.paletteInput) > 0 {
-            m.paletteInput = m.paletteInput[:len(m.paletteInput)-1]
-            m.paletteCursor--
+        if m.paletteInputCursor > 0 {
+            i := m.paletteInputCursor - 1
+            m.paletteInput = append(m.paletteInput[:i], m.paletteInput[m.paletteInputCursor:]...)
+            m.paletteInputCursor--
+            m.paletteIndex = 0
         }
+        return nil
+    case "delete":
+        if m.paletteInputCursor < len(m.paletteInput) { m.paletteInput = append(m.paletteInput[:m.paletteInputCursor], m.paletteInput[m.paletteInputCursor+1:]...) }
         return nil
     case "left":
-        if m.paletteCursor > 0 {
-            m.paletteCursor--
-        }
+        if m.paletteInputCursor > 0 { m.paletteInputCursor-- }
         return nil
     case "right":
-        if m.paletteCursor < len(m.paletteInput) {
-            m.paletteCursor++
-        }
+        if m.paletteInputCursor < len(m.paletteInput) { m.paletteInputCursor++ }
         return nil
     }
     if km.Type == tea.KeyRunes && len(km.Runes) > 0 {
         next := make([]rune, 0, len(m.paletteInput)+len(km.Runes))
-        next = append(next, m.paletteInput[:m.paletteCursor]...)
+        next = append(next, m.paletteInput[:m.paletteInputCursor]...)
         next = append(next, km.Runes...)
-        next = append(next, m.paletteInput[m.paletteCursor:]...)
+        next = append(next, m.paletteInput[m.paletteInputCursor:]...)
         m.paletteInput = next
-        m.paletteCursor += len(km.Runes)
+        m.paletteInputCursor += len(km.Runes)
+        m.paletteIndex = 0
     }
     return nil
 }
@@ -473,40 +433,30 @@ func (m *Model) filteredPaletteActions() []paletteAction {
     q := strings.ToLower(strings.TrimSpace(string(m.paletteInput)))
     var out []paletteAction
     for _, a := range m.paletteActions() {
-        if q == "" || strings.Contains(strings.ToLower(a.Label), q) || strings.Contains(strings.ToLower(a.Hint), q) {
-            out = append(out, a)
-        }
+        if q == "" || strings.Contains(strings.ToLower(a.Label), q) || strings.Contains(strings.ToLower(a.Hint), q) { out = append(out, a) }
     }
     return out
 }
 
 func (m *Model) movePalette(delta int) {
     items := m.filteredPaletteActions()
-    if len(items) == 0 {
-        m.paletteCursor = 0
-        return
-    }
-    m.paletteCursor = (m.paletteCursor + delta + len(items)) % len(items)
+    if len(items) == 0 { m.paletteIndex = 0; return }
+    m.paletteIndex = (m.paletteIndex + delta + len(items)) % len(items)
 }
 
 func (m *Model) runPaletteSelection() tea.Cmd {
     items := m.filteredPaletteActions()
-    if len(items) == 0 {
-        return nil
-    }
-    a := items[m.paletteCursor]
+    if len(items) == 0 { return nil }
+    a := items[m.paletteIndex]
     m.paletteOpen = false
     m.paletteInput = nil
-    m.paletteCursor = 0
+    m.paletteInputCursor = 0
+    m.paletteIndex = 0
     switch a.Label {
-    case "Refresh system":
-        m.refresh()
-    case "Clear terminal":
-        m.terminalOut = nil
+    case "Refresh system": m.refresh()
+    case "Clear terminal": m.terminalOut = nil
     default:
-        if a.App >= 0 {
-            m.setActive(a.App)
-        }
+        if a.App >= 0 { m.setActive(a.App) }
     }
     return nil
 }
@@ -514,165 +464,106 @@ func (m *Model) runPaletteSelection() tea.Cmd {
 func (m *Model) openPalette() {
     m.paletteOpen = true
     m.paletteInput = nil
-    m.paletteCursor = 0
+    m.paletteInputCursor = 0
+    m.paletteIndex = 0
 }
 
 func (m *Model) setActive(i int) {
-    if i < 0 || i >= len(appLabels) {
-        return
-    }
+    if i < 0 || i >= len(appLabels) { return }
     m.active = i
     if i == AppFiles {
         m.fs.Path = m.cwd
         m.fs.Cursor = 0
         m.fs.Reload()
     }
-    if i == AppTasks {
-        m.lastTask = m.tasks.Refresh()
-    }
+    if i == AppTasks { m.lastTask = m.tasks.Refresh() }
 }
 
-func (m *Model) selectPrev() {
-    m.setActive((m.active + len(appLabels) - 1) % len(appLabels))
-}
-
-func (m *Model) selectNext() {
-    m.setActive((m.active + 1) % len(appLabels))
-}
-
+func (m *Model) selectPrev() { m.setActive((m.active + len(appLabels) - 1) % len(appLabels)) }
+func (m *Model) selectNext() { m.setActive((m.active + 1) % len(appLabels)) }
 func (m *Model) activate() {}
 
 func (m *Model) refresh() {
     m.sysInfo = system.Current()
-    if m.active == AppTasks {
-        m.lastTask = m.tasks.Refresh()
-    }
+    if m.active == AppTasks { m.lastTask = m.tasks.Refresh() }
 }
 
 func (m *Model) forwardKey(km tea.KeyMsg) {
     switch m.active {
-    case AppFiles:
-        m.filesKey(km)
-    case AppEditor:
-        m.editorKey(km)
+    case AppFiles: m.filesKey(km)
+    case AppEditor: m.editorKey(km)
     case AppTasks:
-        // reserve future task-manager controls without stealing global keys
     }
 }
 
 func (m *Model) filesKey(km tea.KeyMsg) {
     switch km.String() {
-    case "up":
-        m.fs.Up()
-    case "down":
-        m.fs.Down()
-    case "left":
-        m.fs.GoUp()
+    case "up": m.fs.Up()
+    case "down": m.fs.Down()
+    case "left": m.fs.GoUp()
     case "enter":
         if target := m.fs.Open(); target != "" {
             m.buf = editor.NewBuffer(target)
             m.edView = editor.ViewWindow{}
             m.active = AppEditor
         }
-    case "h":
-        m.fs.Home()
-    case "/":
-        m.fs.Root()
+    case "h": m.fs.Home()
+    case "/": m.fs.Root()
     }
+    if m.active == AppFiles { m.cwd = m.fs.Path }
 }
 
 func (m *Model) editorKey(km tea.KeyMsg) {
-    if m.insertMode {
-        m.editorEditKey(km)
-        return
-    }
+    if m.insertMode { m.editorEditKey(km); return }
     switch km.String() {
-    case "up":
-        m.edView.CursorRow--
-    case "down":
-        m.edView.CursorRow++
-    case "left":
-        if m.edView.CursorCol > 0 { m.edView.CursorCol-- }
-    case "right":
-        m.edView.CursorCol++
-    case "pgup":
-        m.edView.CursorRow -= 10
-    case "pgdown":
-        m.edView.CursorRow += 10
-    case "home":
-        m.edView.CursorCol = 0
-    case "end":
-        if m.buf.Len() > 0 { m.edView.CursorCol = len([]rune(m.buf.Line(m.edView.CursorRow))) }
-    case "i":
-        m.insertMode = true
-    case "ctrl+s":
-        m.saveEditor()
+    case "up": m.edView.CursorRow--
+    case "down": m.edView.CursorRow++
+    case "left": if m.edView.CursorCol > 0 { m.edView.CursorCol-- }
+    case "right": m.edView.CursorCol++
+    case "pgup": m.edView.CursorRow -= 10
+    case "pgdown": m.edView.CursorRow += 10
+    case "home": m.edView.CursorCol = 0
+    case "end": if m.buf.Len() > 0 { m.edView.CursorCol = len([]rune(m.buf.Line(m.edView.CursorRow))) }
+    case "i": m.insertMode = true
+    case "ctrl+s": m.saveEditor()
     }
 }
 
 func (m *Model) editorEditKey(km tea.KeyMsg) {
     switch km.String() {
-    case "escape":
-        m.insertMode = false
+    case "escape": m.insertMode = false
     case "enter":
-        if m.buf.SplitLine(m.edView.CursorRow, m.edView.CursorCol) {
-            m.edView.CursorRow++
-            m.edView.CursorCol = 0
-        }
+        if m.buf.SplitLine(m.edView.CursorRow, m.edView.CursorCol) { m.edView.CursorRow++; m.edView.CursorCol = 0 }
     case "backspace":
-        if m.edView.CursorCol > 0 {
-            m.buf.DeleteAt(m.edView.CursorRow, m.edView.CursorCol-1)
-            m.edView.CursorCol--
-        }
+        if m.edView.CursorCol > 0 { m.buf.DeleteAt(m.edView.CursorRow, m.edView.CursorCol-1); m.edView.CursorCol-- }
     case "delete":
         m.buf.DeleteAt(m.edView.CursorRow, m.edView.CursorCol)
     case "ctrl+s":
         m.saveEditor()
     default:
         if km.Type == tea.KeyRunes && len(km.Runes) > 0 {
-            r := string(km.Runes)
-            m.buf.InsertAt(m.edView.CursorRow, m.edView.CursorCol, r)
-            m.edView.CursorCol += len([]rune(r))
+            s := string(km.Runes)
+            m.buf.InsertAt(m.edView.CursorRow, m.edView.CursorCol, s)
+            m.edView.CursorCol += len([]rune(s))
         }
     }
 }
 
 func (m *Model) saveEditor() {
-    if err := m.buf.Save(); err != nil {
-        m.errMsg = "save failed: " + err.Error()
-        return
-    }
-    m.savedMsg = "saved " + m.buf.Path
+    if err := m.buf.Save(); err != nil { m.errMsg = "save failed: "+err.Error(); return }
+    m.savedMsg = "saved "+m.buf.Path
 }
 
 func (m *Model) handleMouse(me tea.MouseMsg) {
-    if me.Action != tea.MouseActionPress || me.Y != 0 {
-        return
-    }
-    if m.paletteOpen {
-        return
-    }
-    idx := m.topBarAppAt(me.X)
-    if idx >= 0 {
-        m.setActive(idx)
-    }
-}
-
-func (m *Model) topBarCells() []string {
-    out := make([]string, len(appLabels))
-    for i, label := range appLabels {
-        out[i] = fmt.Sprintf(" %d %s ", i+1, label)
-    }
-    return out
+    if me.Action != tea.MouseActionPress || me.Y != 0 || m.paletteOpen { return }
+    if idx := m.topBarAppAt(me.X); idx >= 0 { m.setActive(idx) }
 }
 
 func (m *Model) topBarAppAt(x int) int {
-    pos := 12
+    pos := lipgloss.Width(" ◈ VELDRA ")
     for i, cell := range m.topBarCells() {
         w := lipgloss.Width(cell)
-        if x >= pos && x < pos+w {
-            return i
-        }
+        if x >= pos && x < pos+w { return i }
         pos += w
     }
     return -1
@@ -686,38 +577,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
         m.ready = true
     case tea.KeyMsg:
         cmd = m.handleKey(msg)
-        if m.quitting {
-            return m, tea.Quit
-        }
+        if m.quitting { return m, tea.Quit }
     case tea.MouseMsg:
         m.handleMouse(msg)
     case terminalResultMsg:
         m.terminalRunning = false
         m.terminalStatus = "ready"
         text := cleanOutput(msg.Output)
-        if text != "" {
-            m.terminalOut = append(m.terminalOut, strings.Split(strings.TrimRight(text, "\n"), "\n")...)
-        }
-        if msg.Err != nil {
-            m.terminalOut = append(m.terminalOut, m.styles.Error.Render(msg.Err.Error()))
-        }
+        if text != "" { m.terminalOut = append(m.terminalOut, strings.Split(strings.TrimRight(text, "\n"), "\n")...) }
+        if msg.Err != nil { m.terminalOut = append(m.terminalOut, m.styles.Error.Render(msg.Err.Error())) }
         m.terminalOut = append(m.terminalOut, fmt.Sprintf("[%s]", msg.Duration.Round(time.Millisecond)))
         m.trimTerminalOutput()
     case refreshMsg:
         m.refresh()
         cmd = tick()
     }
-    if m.buf != nil {
-        m.edView.Clamp(m.buf, m.editorHeight())
-    }
+    if m.buf != nil { m.edView.Clamp(m.buf, m.editorHeight()) }
     return m, cmd
 }
 
 func (m *Model) editorHeight() int {
     h := m.height - 5
-    if h < 3 {
-        h = 3
-    }
+    if h < 3 { h = 3 }
     return h
 }
 
@@ -734,9 +615,7 @@ func (m *Model) prompt() string {
 func (m *Model) displayCWD() string {
     if home, err := os.UserHomeDir(); err == nil {
         if m.cwd == home { return "~" }
-        if strings.HasPrefix(m.cwd, home+string(os.PathSeparator)) {
-            return "~" + strings.TrimPrefix(m.cwd, home)
-        }
+        if strings.HasPrefix(m.cwd, home+string(os.PathSeparator)) { return "~"+strings.TrimPrefix(m.cwd, home) }
     }
     return m.cwd
 }
@@ -744,8 +623,14 @@ func (m *Model) displayCWD() string {
 func (m *Model) editorStatus() string {
     mode := "NORMAL"
     if m.insertMode { mode = "INSERT" }
-    return mode + "  " + m.displayCWD()
+    return mode+"  "+m.displayCWD()
 }
 
-// Compatibility helpers for existing tests/tools.
+func (m *Model) topBarCells() []string {
+    out := make([]string, len(appLabels))
+    for i, label := range appLabels { out[i] = fmt.Sprintf(" %d %s ", i+1, label) }
+    return out
+}
+
+// Compatibility helper retained for existing tests/tools.
 func (m *Model) dockItemAt(x int) int { return m.topBarAppAt(x) }
