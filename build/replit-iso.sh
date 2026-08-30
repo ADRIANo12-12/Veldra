@@ -34,11 +34,18 @@ ARCH_ISO_URL="https://geo.mirror.pkgbuild.com/iso/${ARCH_RELEASE}/${ARCH_ISO_NAM
 ARCH_ISO_SHA256="4e82dced1c4fd3e498b22a853f8db2a4d262d32b97e7e07d97390d9e425ffe5e"
 ARCH_ISO="${WORK}/${ARCH_ISO_NAME}"
 SOURCE_SFS="${WORK}/airootfs.sfs"
-ROOTFS="${WORK}/rootfs"
-WRITABLE_ROOTFS="${WORK}/rootfs-writable"
-NEW_SFS="${WORK}/veldra-airootfs.sfs"
+# unsquashfs restores the original numeric owners. That is correct for an ISO,
+# but those owners are not writable by Replit's runner user. Use a new, unique
+# extraction directory for each run, then normalize the tree through tar into
+# a runner-owned directory before editing it. The old extraction is left
+# untouched because an unprivileged process cannot recursively remove its
+# root-owned entries.
+RUN_ID="${EPOCHSECONDS:-$(date +%s)}-${RANDOM}"
+EXTRACT_ROOTFS="${WORK}/rootfs-extract-${RUN_ID}"
+ROOTFS="${WORK}/rootfs-${RUN_ID}"
+NEW_SFS="${WORK}/veldra-airootfs-${RUN_ID}.sfs"
 
-vd_require curl xorriso unsquashfs mksquashfs sha256sum awk sed install mkdir rm cp
+vd_require curl xorriso unsquashfs mksquashfs sha256sum awk sed install mkdir rm cp tar
 
 vd_info "Replit-compatible Veldra ISO builder — ${VERSION} / ${ARCH}"
 vd_warn "This is a sandbox compatibility build; canonical 'make iso' remains the normal Arch-container pipeline."
@@ -68,9 +75,8 @@ if ! xorriso -indev "$ARCH_ISO" -ls "$SFS_PATH" >/dev/null 2>&1; then
 fi
 
 # --- extract and modify live rootfs -----------------------------------------
-rm -f "$SOURCE_SFS" "$NEW_SFS"
-rm -rf "$ROOTFS" "$WRITABLE_ROOTFS"
-mkdir -p "$ROOTFS" "$WRITABLE_ROOTFS"
+rm -f "$SOURCE_SFS"
+mkdir -p "$EXTRACT_ROOTFS" "$ROOTFS"
 
 vd_info "extracting Arch live rootfs"
 xorriso -osirrox on -indev "$ARCH_ISO" \
@@ -78,17 +84,15 @@ xorriso -osirrox on -indev "$ARCH_ISO" \
 [[ -s "$SOURCE_SFS" ]] || vd_die 1 "failed to extract $SFS_PATH"
 
 vd_info "unpacking Arch live rootfs without root"
-unsquashfs -no-xattrs -d "$ROOTFS" "$SOURCE_SFS" >/dev/null
-[[ -d "$ROOTFS/etc" && -d "$ROOTFS/usr" ]] || \
+unsquashfs -no-xattrs -d "$EXTRACT_ROOTFS" "$SOURCE_SFS" >/dev/null
+[[ -d "$EXTRACT_ROOTFS/etc" && -d "$EXTRACT_ROOTFS/usr" ]] || \
     vd_die 1 "extracted Arch rootfs does not look valid"
 
-# SquashFS stores the original ownership/mode bits. Rebuild a writable working
-# tree owned by the current Replit user, without requiring root/chown. GNU cp
-# can copy the readable tree while intentionally not preserving ownership.
-vd_info "creating writable rootfs working tree"
-cp -a --no-preserve=ownership "$ROOTFS/." "$WRITABLE_ROOTFS/"
-rm -rf "$ROOTFS"
-ROOTFS="$WRITABLE_ROOTFS"
+# Normalize the extracted tree into a runner-owned directory. This avoids
+# mutating or deleting root-owned files restored from the source SquashFS.
+vd_info "normalizing rootfs ownership for the Replit sandbox"
+tar -C "$EXTRACT_ROOTFS" -cf - . \
+    | tar -C "$ROOTFS" --no-same-owner --no-same-permissions -xf -
 
 # Build the TUI locally if the caller did not already do so.
 TUI_BIN="${VELDRA_PROJECT_ROOT}/tui/bin/veldra-tui"
