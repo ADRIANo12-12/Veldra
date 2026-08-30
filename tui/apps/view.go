@@ -1,7 +1,6 @@
 // Veldra
 // Copyright (c) 2026 Adrian Sikora
 // All rights reserved.
-// Proprietary and confidential.
 //
 // Full-screen terminal desktop shell renderer.
 package apps
@@ -39,7 +38,11 @@ func (m *Model) viewTopBar() string {
     workspaces := ""
     for i, label := range appLabels {
         item := fmt.Sprintf(" %d %s ", i+1, label)
-        if i == m.active { item = m.styles.BarActive.Render(item) } else { item = m.styles.BarItem.Render(item) }
+        if i == m.active {
+            item = m.styles.BarWorkspaceActive.Render(item)
+        } else {
+            item = m.styles.BarWorkspace.Render(item)
+        }
         workspaces += item
     }
     memUsed := float64(m.sysInfo.MemTotal-m.sysInfo.MemAvailable) / 1024
