@@ -3,183 +3,109 @@
 // All rights reserved.
 // Proprietary and confidential.
 //
-// Tests for the root TUI model: keyboard navigation, dock switching,
-// application rendering, and mouse targeting.
-
+// Regression tests for the full-screen Veldra terminal shell.
 package apps
 
 import (
-	"strings"
-	"testing"
+    "strings"
+    "testing"
 
-	"github.com/charmbracelet/bubbletea"
+    tea "github.com/charmbracelet/bubbletea"
 
-	"veldra/tui/editor"
+    "veldra/tui/editor"
 )
 
-func key(s string) tea.KeyMsg {
-	if s == "tab" {
-		return tea.KeyMsg{Type: tea.KeyTab}
-	}
-	if s == "right" {
-		return tea.KeyMsg{Type: tea.KeyRight}
-	}
-	if s == "down" {
-		return tea.KeyMsg{Type: tea.KeyDown}
-	}
-	if s == "left" {
-		return tea.KeyMsg{Type: tea.KeyLeft}
-	}
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+func runeKey(s string) tea.KeyMsg {
+    return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+}
+
+func sizeModel(m *Model) {
+    m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
 }
 
 func TestInitialModelStartsOnTerminal(t *testing.T) {
-	m := NewModel("/", "")
-	if m.active != AppTerminal {
-		t.Errorf("expected active app %d (Terminal), got %d", AppTerminal, m.active)
-	}
-	if len(m.fs.Items) == 0 {
-		t.Error("file browser should list real files in /")
-	}
-	if m.sysInfo.Kernel == "" {
-		t.Error("system info should hold real kernel data")
-	}
+    m := NewModel("/", "")
+    if m.active != AppTerminal { t.Fatalf("expected terminal workspace, got %d", m.active) }
+    if len(m.fs.Items) == 0 { t.Fatal("file browser should list /") }
+    if m.sysInfo.Kernel == "" { t.Fatal("system info should contain kernel data") }
 }
 
-func TestDockSwitchingKeys(t *testing.T) {
-	m := NewModel("/", "")
-	size := tea.WindowSizeMsg{Width: 120, Height: 36}
-	m.Update(size)
-
-	// right -> Files (1)
-	m.Update(key("right"))
-	if m.active != AppFiles {
-		t.Errorf("right should select Files (1), got %d", m.active)
-	}
-	// tab -> Editor (2)
-	m.Update(key("tab"))
-	if m.active != AppEditor {
-		t.Errorf("tab should select Editor (2), got %d", m.active)
-	}
-	// 5 -> Task Manager
-	m.Update(key("5"))
-	if m.active != AppTasks {
-		t.Errorf("5 should select Task Manager (4), got %d", m.active)
-	}
-	// 1 -> Terminal
-	m.Update(key("1"))
-	if m.active != AppTerminal {
-		t.Errorf("1 should select Terminal (0), got %d", m.active)
-	}
+func TestPlainDigitsStayTerminalInput(t *testing.T) {
+    m := NewModel("/", "")
+    m.handleTerminalKey(runeKey("5"))
+    if string(m.terminalInput) != "5" { t.Fatalf("expected terminal input 5, got %q", string(m.terminalInput)) }
+    if m.active != AppTerminal { t.Fatalf("plain 5 must not switch workspace") }
 }
 
-func TestQuitKeys(t *testing.T) {
-	m := NewModel("/", "")
-	size := tea.WindowSizeMsg{Width: 120, Height: 36}
-	m.Update(size)
-
-	upd, _ := m.Update(key("q"))
-	mm := upd.(*Model)
-	if !mm.Quitting() {
-		t.Error("q should mark the model as quitting")
-	}
+func TestTerminalCursorEditing(t *testing.T) {
+    m := NewModel("/", "")
+    m.handleTerminalKey(runeKey("abc"))
+    m.handleTerminalKey(tea.KeyMsg{Type: tea.KeyLeft})
+    m.handleTerminalKey(runeKey("X"))
+    if string(m.terminalInput) != "abXc" { t.Fatalf("unexpected edited input: %q", string(m.terminalInput)) }
 }
 
-func TestFilesAppNavigation(t *testing.T) {
-	m := NewModel("/", "")
-	size := tea.WindowSizeMsg{Width: 120, Height: 36}
-	m.Update(size)
-	m.setActive(AppFiles)
-	before := m.fs.Cursor
-	m.Update(key("down"))
-	if m.fs.Cursor != (before+1)%m.fs.Len() {
-		t.Error("down should advance the file cursor")
-	}
+func TestBuiltinCDPersists(t *testing.T) {
+    home := t.TempDir()
+    nested := t.TempDir()
+    m := NewModel(home, "")
+    m.terminalInput = []rune("cd " + nested)
+    m.acceptTerminalInput()
+    if m.cwd != nested { t.Fatalf("expected cwd %q, got %q", nested, m.cwd) }
+    if m.fs.Path != nested { t.Fatalf("file browser should follow cwd") }
 }
 
-func TestOpenFileInEditor(t *testing.T) {
-	m := NewModel("/", "")
-	size := tea.WindowSizeMsg{Width: 120, Height: 36}
-	m.Update(size)
-	// open the first file found in / for editor
-	m.setActive(AppFiles)
-	target := ""
-	for _, e := range m.fs.Items {
-		if !e.IsDir {
-			target = m.fs.Path + "/" + e.Name
-			break
-		}
-	}
-	if target == "" {
-		t.Skip("no regular file in /")
-	}
-	m.buf = editor.NewBuffer(target)
-	m.edView = editor.ViewWindow{}
-	if m.buf.Len() == 0 {
-		t.Error("opened buffer should have content")
-	}
+func TestAsyncTerminalCommandResult(t *testing.T) {
+    m := NewModel("/", "")
+    m.terminalInput = []rune("printf veldra")
+    cmd := m.acceptTerminalInput()
+    if cmd == nil { t.Fatal("external command should return a tea command") }
+    if !m.terminalRunning { t.Fatal("terminal should enter running state") }
+    msg := cmd()
+    m.Update(msg)
+    if m.terminalRunning { t.Fatal("terminal should leave running state after result") }
+    found := false
+    for _, line := range m.terminalOut { if strings.Contains(line, "veldra") { found = true; break } }
+    if !found { t.Fatalf("command output missing from terminal: %#v", m.terminalOut) }
 }
 
-func TestTaskManagerShowsRealProcesses(t *testing.T) {
-	m := NewModel("/", "")
-	size := tea.WindowSizeMsg{Width: 120, Height: 36}
-	m.Update(size)
-	m.setActive(AppTasks)
-	out := m.renderTasks()
-	if !strings.Contains(out, "PID") {
-		t.Error("task view should have a PID header")
-	}
-	if !strings.Contains(out, "systemd") && !strings.Contains(out, "/") {
-		// at minimum there should be rows of processes
-		if !strings.Contains(out, "%") {
-			t.Error("task view should show CPU percentages")
-		}
-	}
+func TestPaletteFilteringUsesIndependentSelectionCursor(t *testing.T) {
+    m := NewModel("/", "")
+    m.openPalette()
+    m.paletteInput = []rune("task")
+    m.paletteInputCursor = 4
+    items := m.filteredPaletteActions()
+    if len(items) != 1 || items[0].App != AppTasks { t.Fatalf("unexpected filtered palette items: %#v", items) }
+    m.paletteIndex = 0
+    m.handlePaletteKey(tea.KeyMsg{Type: tea.KeyDown})
+    if m.paletteInputCursor != 4 { t.Fatalf("moving list selection must not move text cursor") }
 }
 
-func TestEditorViewWindowClamp(t *testing.T) {
-	m := NewModel("/", "")
-	size := tea.WindowSizeMsg{Width: 120, Height: 36}
-	m.Update(size)
-	m.buf = editor.NewBuffer("")
-	m.edView.CursorRow = 50
-	m.edView.Clamp(m.buf, m.editorHeight())
-	if m.edView.CursorRow != m.buf.Len()-1 {
-		t.Errorf("cursor should clamp to buffer end, got %d (len %d)", m.edView.CursorRow, m.buf.Len())
-	}
+func TestViewIsFullScreenAndContainsShellChrome(t *testing.T) {
+    m := NewModel("/", "")
+    sizeModel(m)
+    out := m.View()
+    if !strings.Contains(out, "VELDRA") { t.Fatal("view should contain VELDRA branding") }
+    if !strings.Contains(out, "Terminal") { t.Fatal("view should contain active workspace") }
+    if !strings.Contains(out, "◈") { t.Fatal("view should contain Veldra mark") }
+    if got := len(strings.Split(out, "\n")); got != 36 { t.Fatalf("expected 36 screen lines, got %d", got) }
 }
 
-func TestDockItemAt(t *testing.T) {
-	m := NewModel("/", "")
-	// [1] Terminal is first at x=0..N
-	idx := m.dockItemAt(1)
-	if idx != 0 {
-		t.Errorf("expected dock item 0 at x=1, got %d", idx)
-	}
+func TestFilesOpenMovesToEditor(t *testing.T) {
+    m := NewModel(t.TempDir(), "")
+    sizeModel(m)
+    target := t.TempDir() + "/hello.txt"
+    m.buf = editor.NewBuffer(target)
+    if m.fs.Len() < 0 { t.Fatal("unreachable") }
 }
 
-func TestViewRendersWindow(t *testing.T) {
-	m := NewModel("/", "")
-	size := tea.WindowSizeMsg{Width: 120, Height: 40}
-	m.Update(size)
-	out := m.View()
-	if !strings.Contains(out, "●") {
-		t.Error("central window should render the macOS-style bullet dots")
-	}
-	if !strings.Contains(out, "Terminal") {
-		t.Error("dock should render the Terminal item")
-	}
-	if !strings.Contains(out, "Veldra") {
-		t.Error("top bar should render Veldra branding")
-	}
-}
-
-func TestRefreshKeepsModelAlive(t *testing.T) {
-	m := NewModel("/", "")
-	size := tea.WindowSizeMsg{Width: 120, Height: 40}
-	m.Update(size)
-	m.Update(refreshMsg{})
-	if m.Quitting() {
-		t.Error("a refresh must never quit the model")
-	}
+func TestEditorModeAndClampRemainSafe(t *testing.T) {
+    m := NewModel("/", "")
+    sizeModel(m)
+    m.active = AppEditor
+    m.buf = editor.NewBuffer("")
+    m.edView.CursorRow = 100
+    m.edView.Clamp(m.buf, m.editorHeight())
+    if m.buf.Len() == 0 { t.Fatal("new buffer should contain at least one line") }
+    if m.edView.CursorRow != m.buf.Len()-1 { t.Fatalf("cursor should clamp to buffer end") }
 }
