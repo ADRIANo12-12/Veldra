@@ -8,12 +8,11 @@ All rights reserved. Proprietary and confidential.
 
 - Go 1.21+ for the TUI build
 - Podman **or** Docker — provides the isolated Arch Linux build
-  environment (Veldra's base is Arch; pacman/grub-mkrescue/kernel
-  tooling only exist for Arch)
+  environment for the canonical ISO build
 - `make`, `git`
 - `qemu-system-x86_64` for booting the result (`make qemu`)
 
-Check everything with:
+For the canonical build, check everything with:
 
     make check-deps
 
@@ -21,15 +20,48 @@ Check everything with:
 
     make check      # compile + vet + tests + shell syntax + template sanity
     make test       # Go unit tests
-    make iso        # builds Veldra live ISO (builds the container on first run)
-    make qemu       # boots the ISO headless (QEMU -nographic)
+    make iso        # canonical Veldra live ISO (Arch container required)
+    make qemu       # boots the canonical ISO headless (QEMU -nographic)
 
 Artifacts land in `build/out/`:
 
-- `veldra-<version>-rootfs.tar.zst` — the rootfs archive
+- `veldra-<version>-rootfs.tar.zst` — the canonical Veldra rootfs archive
 - `veldra-<version>-x86_64.iso` — bootable live ISO (BIOS + UEFI)
 
-## How the container works
+## Replit / unprivileged hosted environments
+
+Some hosted development environments provide a Docker client but no Docker
+engine, and do not grant root privileges. In that case the canonical
+container build cannot run. Veldra therefore includes a separate compatibility
+backend:
+
+    make replit-iso
+    make replit-qemu
+
+`build/replit-iso.sh` downloads the current official Arch Linux release ISO,
+verifies its SHA256 checksum, extracts only the live `airootfs.sfs`, installs
+the Veldra TUI and autologin configuration without `pacman`, `mount`, `chroot`,
+or root, repacks the SquashFS, and replaces that file inside the original ISO
+while preserving the official BIOS/UEFI boot metadata.
+
+The Replit backend is intentionally separate from `make iso`. It is a
+sandbox-compatibility path, not a replacement for the canonical Arch build.
+The current pinned source release is Arch Linux 2026.08.01 (kernel 7.1.5). See
+the official Arch release page for the release and checksum information.
+
+Replit also needs these host tools available in PATH:
+
+    curl
+    xorriso
+    unsquashfs
+    mksquashfs
+    sha256sum
+
+The Replit QEMU target forces TCG and disables graphical display:
+
+    qemu-system-x86_64 -machine accel=tcg -nographic -display none
+
+## How the canonical container works
 
 `build/container/run.sh` builds `veldra-arch-builder:latest` from
 `archlinux:latest` (base-devel, arch-install-scripts, grub, libisoburn,
