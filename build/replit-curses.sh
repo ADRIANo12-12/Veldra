@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build/replit-curses.sh — make the Replit ISO stay in VGA text mode for QEMU curses.
+# build/replit-curses.sh — boot Veldra in QEMU curses using the ArchISO kernel directly.
 #
 # Veldra
 # Copyright (c) 2026 Adrian Sikora
@@ -15,78 +15,56 @@ VERSION="$("$ROOT/scripts/version.sh" show)"
 ARCH="${VELDRA_ARCH_DEFAULT:-x86_64}"
 ISO="$ROOT/build/out/veldra-${VERSION}-${ARCH}.iso"
 WORK="$ROOT/build/work/replit/curses-${EPOCHSECONDS:-$(date +%s)}-${RANDOM}"
-PATCHED="$WORK/patched.iso"
+KERNEL="$WORK/vmlinuz-linux"
+INITRD="$WORK/initramfs-linux.img"
 
-vd_require xorriso mkdir rm cp sed grep test
+vd_require xorriso mkdir rm test qemu-system-x86_64
 [[ -s "$ISO" ]] || vd_die 1 "Replit ISO not found: $ISO"
 
 mkdir -p "$WORK"
 
-PATCHES=()
+vd_info "preparing Veldra for QEMU curses"
 
-patch_file() {
-    local iso_path="$1"
-    local out_file="$WORK/$(echo "$iso_path" | tr '/:' '__')"
-
-    if ! xorriso -indev "$ISO" -osirrox on -extract "$iso_path" "$out_file" >/dev/null 2>&1; then
-        return 1
+# ArchISO places the live kernel and initramfs under arch/boot/x86_64.
+# Boot them directly so QEMU can pass nomodeset without relying on a
+# particular GRUB/Syslinux layout inside the ISO.
+for kernel_path in \
+    /arch/boot/x86_64/vmlinuz-linux \
+    /arch/boot/x86_64/vmlinuz-linux-lts; do
+    if xorriso -osirrox on -indev "$ISO" -extract "$kernel_path" "$KERNEL" >/dev/null 2>&1 && [[ -s "$KERNEL" ]]; then
+        vd_ok "using ArchISO kernel: $kernel_path"
+        break
     fi
-
-    [[ -s "$out_file" ]] || return 1
-
-    case "$iso_path" in
-        */grub.cfg)
-            sed -E -i \
-                '/^[[:space:]]*(linux|linuxefi)([[:space:]]|$)/ {
-                    /nomodeset/! s/[[:space:]]*$/ nomodeset/;
-                }' "$out_file"
-            ;;
-        */syslinux*.cfg)
-            sed -E -i \
-                '/^[[:space:]]*APPEND([[:space:]]|$)/ {
-                    /nomodeset/! s/[[:space:]]*$/ nomodeset/;
-                }' "$out_file"
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-
-    PATCHES+=("$out_file|$iso_path")
-    vd_ok "patched boot config: $iso_path (nomodeset)"
-    return 0
-}
-
-vd_info "preparing Replit ISO for QEMU curses"
-
-# The BIOS GRUB config is the important path for the x86_64 QEMU invocation.
-patch_file "/boot/grub/grub.cfg" || true
-
-# Cover common ArchISO Syslinux layouts as a fallback/secondary BIOS path.
-patch_file "/syslinux/syslinux.cfg" || true
-patch_file "/syslinux/archiso_sys.cfg" || true
-patch_file "/syslinux/archiso_sys-linux.cfg" || true
-
-if [[ ${#PATCHES[@]} -eq 0 ]]; then
-    vd_die 1 "could not locate a patchable BIOS boot configuration in the Replit ISO"
-fi
-
-rm -f "$PATCHED"
-
-XORRISO_ARGS=(
-    -indev "$ISO"
-    -outdev "$PATCHED"
-    -boot_image any replay
-)
-for patch in "${PATCHES[@]}"; do
-    src="${patch%%|*}"
-    dst="${patch#*|}"
-    XORRISO_ARGS+=( -map "$src" "$dst" )
+    rm -f "$KERNEL"
 done
-XORRISO_ARGS+=( -commit )
 
-xorriso "${XORRISO_ARGS[@]}" >/dev/null
-[[ -s "$PATCHED" ]] || vd_die 1 "failed to create curses-compatible ISO"
+[[ -s "$KERNEL" ]] || vd_die 1 "could not extract an ArchISO kernel"
 
-mv -f "$PATCHED" "$ISO"
-vd_ok "curses-compatible Veldra ISO ready: $ISO"
+for initrd_path in \
+    /arch/boot/x86_64/initramfs-linux.img \
+    /arch/boot/x86_64/initramfs-linux-lts.img; do
+    if xorriso -osirrox on -indev "$ISO" -extract "$initrd_path" "$INITRD" >/dev/null 2>&1 && [[ -s "$INITRD" ]]; then
+        vd_ok "using ArchISO initramfs: $initrd_path"
+        break
+    fi
+    rm -f "$INITRD"
+done
+
+[[ -s "$INITRD" ]] || vd_die 1 "could not extract an ArchISO initramfs"
+
+# The Arch live system discovers its squashfs on the attached CD using the
+# standard archiso parameters. nomodeset keeps the guest on VGA text mode,
+# which is exactly what QEMU's curses display can render.
+APPEND="archisobasedir=arch archisolabel=ARCH_202608 nomodeset console=tty1"
+
+vd_info "booting Veldra with QEMU curses (VGA text mode)"
+exec qemu-system-x86_64 \
+    -machine accel=tcg \
+    -m 1024 \
+    -kernel "$KERNEL" \
+    -initrd "$INITRD" \
+    -append "$APPEND" \
+    -cdrom "$ISO" \
+    -display curses \
+    -vga std \
+    -monitor none
