@@ -5,11 +5,6 @@
 # Copyright (c) 2026 Adrian Sikora
 # All rights reserved.
 # Proprietary and confidential.
-#
-# Replit has no Docker daemon and no root privileges. This compatibility path
-# starts from the official Arch ISO, extracts its live airootfs.sfs, modifies
-# the live tree, and replaces that one member while replaying the original
-# BIOS/UEFI boot metadata.
 
 set -euo pipefail
 
@@ -32,6 +27,17 @@ SOURCE_SFS="${WORK}/airootfs.sfs"
 RUN_ID="${EPOCHSECONDS:-$(date +%s)}-${RANDOM}"
 ROOTFS="${WORK}/rootfs-${RUN_ID}"
 NEW_SFS="${WORK}/veldra-airootfs-${RUN_ID}.sfs"
+
+# Replit ships an older SquashFS toolset. Automatically re-exec this builder
+# inside the current nixpkgs-unstable squashfsTools package when needed.
+if [[ "${VELDRA_REPLIT_SQUASHFS_REEXEC:-0}" != "1" ]] && command -v nix >/dev/null 2>&1 && command -v unsquashfs >/dev/null 2>&1; then
+    SQUASHFS_VERSION="$(unsquashfs -version 2>&1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1 || true)"
+    if [[ -z "$SQUASHFS_VERSION" ]] || [[ "$(printf '%s\n' "$SQUASHFS_VERSION" "4.7.6" | sort -V | head -n1)" != "4.7.6" ]]; then
+        vd_info "Replit: switching to nixpkgs unstable squashfs-tools"
+        exec nix shell github:NixOS/nixpkgs/nixos-unstable#squashfsTools \
+            --command env VELDRA_REPLIT_SQUASHFS_REEXEC=1 bash "$0" "$@"
+    fi
+fi
 
 vd_require curl xorriso unsquashfs mksquashfs sha256sum awk sed install mkdir rm du
 
@@ -68,21 +74,14 @@ xorriso -osirrox on -indev "$ARCH_ISO" \
 [[ -s "$SOURCE_SFS" ]] || vd_die 1 "failed to extract $SFS_PATH"
 
 vd_info "unpacking Arch live rootfs with writable permissions"
-
-# Replit cannot chown/chmod root-owned files restored from a SquashFS image.
-# SquashFS-tools 4.7.6 added extraction-time permission overrides, allowing us
-# to preserve the file contents while making the temporary host tree writable.
-# The final mksquashfs call restores root ownership and sane guest permissions.
-if unsquashfs -help 2>&1 | grep -q -- '-force-file-mode'; then
-    unsquashfs \
-        -no-xattrs \
-        -force-file-mode 'ugo+rX,u+rw' \
-        -force-dir-mode 'ugo+rwx' \
-        -d "$ROOTFS" "$SOURCE_SFS" >/dev/null
-else
-    vd_die 2 "Replit ISO builds require SquashFS tools 4.7.6+; run the target through nixpkgs unstable"
+if ! unsquashfs -help 2>&1 | grep -q -- '-force-file-mode'; then
+    vd_die 2 "SquashFS 4.7.6+ was not activated; run 'nix shell github:NixOS/nixpkgs/nixos-unstable#squashfsTools --command bash build/replit-iso.sh'"
 fi
-
+unsquashfs \
+    -no-xattrs \
+    -force-file-mode 'ugo+rX,u+rw' \
+    -force-dir-mode 'ugo+rwx' \
+    -d "$ROOTFS" "$SOURCE_SFS" >/dev/null
 [[ -d "$ROOTFS/etc" && -d "$ROOTFS/usr" ]] || \
     vd_die 1 "extracted Arch rootfs does not look valid"
 
