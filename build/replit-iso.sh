@@ -57,11 +57,16 @@ fi
 printf '%s  %s\n' "$ARCH_ISO_SHA256" "$ARCH_ISO" | sha256sum -c -
 vd_ok "Arch ISO checksum verified"
 
-# Find the live filesystem path instead of hardcoding the ISO layout.
-SFS_PATH="$(xorriso -indev "$ARCH_ISO" -find / -type f -name airootfs.sfs -print 2>/dev/null \
-    | awk 'NF {print $NF; exit}')"
-[[ -n "$SFS_PATH" ]] || vd_die 1 "could not locate airootfs.sfs in the Arch ISO"
+# Archiso stores the live x86_64 filesystem at this stable path.
+# Keep discovery deterministic instead of relying on xorriso's find syntax,
+# which differs between hosted xorriso builds and is unnecessary here.
+SFS_PATH="/arch/x86_64/airootfs.sfs"
 vd_info "Arch live root: $SFS_PATH"
+
+# Verify that the expected ISO member exists before extracting it.
+if ! xorriso -indev "$ARCH_ISO" -ls "$SFS_PATH" >/dev/null 2>&1; then
+    vd_die 1 "official Arch ISO does not contain expected live root: $SFS_PATH"
+fi
 
 # --- extract and modify live rootfs -----------------------------------------
 rm -f "$SOURCE_SFS" "$NEW_SFS"
