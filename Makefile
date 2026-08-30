@@ -49,6 +49,10 @@ replit-iso: ## Build a Replit-compatible ISO without Docker/Podman/root
 		--command bash -lc 'cd "$(ROOT)" && scripts/build-tui.sh && bash build/replit-iso.sh'
 
 replit-qemu: replit-iso ## Boot the Replit-compatible ISO in terminal curses mode using QEMU TCG
+	@command -v nix >/dev/null 2>&1 || { echo "nix is required for replit-qemu"; exit 1; }
+	@nix shell \
+		github:NixOS/nixpkgs/nixos-unstable#xorriso \
+		--command bash -lc 'cd "$(ROOT)" && bash build/replit-curses.sh'
 	@test -f "$(ISO)" || { echo "ISO not found: $(ISO)"; exit 1; }
 	@echo "Booting Veldra $(VERSION) in QEMU/TCG (curses VGA text mode)..."
 	@qemu-system-x86_64 \
@@ -77,7 +81,7 @@ check: ## Full tree check: compile, vet, tests, shell syntax, template sanity
 	scripts/build-tui.sh --check
 	cd $(ROOT)/tui && go test ./...
 	bash -n scripts/common.sh scripts/version.sh scripts/check-deps.sh scripts/build-tui.sh
-	bash -n build/build.sh build/rootfs.sh build/iso.sh build/container/run.sh build/replit-iso.sh
+	bash -n build/build.sh build/rootfs.sh build/iso.sh build/container/run.sh build/replit-iso.sh build/replit-curses.sh
 	bash -n system/install.sh boot/install.sh
 	scripts/version.sh inject boot/grub/grub.cfg.in >/dev/null
 	@echo "[ OK ] Veldra $(VERSION) checks passed"
@@ -89,6 +93,7 @@ lint: ## Lint the shell scripts (shellcheck)
 	@command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck is not installed"; exit 1; }
 	shellcheck -S warning scripts/*.sh build/*.sh build/container/*.sh system/*.sh boot/*.sh
 	shellcheck -S warning build/replit-iso.sh
+	shellcheck -S warning build/replit-curses.sh
 
 fmt: ## Format the Go source
 	cd $(ROOT)/tui && gofmt -l . | grep -v '^$$' || true
