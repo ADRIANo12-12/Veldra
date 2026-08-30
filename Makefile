@@ -37,14 +37,16 @@ all: ## tui + rootfs + iso
 container: ## Build/refresh the isolated Arch build container image
 	build/container/run.sh --init
 
+# Replit has no Docker daemon and its base Nix channel has an older Go.
+# Keep the complete compatibility build in one explicit unstable shell.
 replit-iso: ## Build a Replit-compatible ISO without Docker/Podman/root
 	@command -v nix >/dev/null 2>&1 || { echo "nix is required for replit-iso"; exit 1; }
 	@nix shell \
-		github:NixOS/nixpkgs/nixos-unstable#go_1_24 \
+		github:NixOS/nixpkgs/nixos-unstable#go_1_25 \
 		github:NixOS/nixpkgs/nixos-unstable#xorriso \
 		github:NixOS/nixpkgs/nixos-unstable#squashfsTools \
 		github:NixOS/nixpkgs/nixos-unstable#fakeroot \
-		--command bash -c 'cd "$(ROOT)" && exec bash build/replit-iso.sh'
+		--command bash -lc 'cd "$(ROOT)" && scripts/build-tui.sh && bash build/replit-iso.sh'
 
 replit-qemu: replit-iso ## Boot the Replit-compatible ISO headless using QEMU TCG
 	@test -f "$(ISO)" || { echo "ISO not found: $(ISO)"; exit 1; }
@@ -59,7 +61,7 @@ replit-qemu: replit-iso ## Boot the Replit-compatible ISO headless using QEMU TC
 		-cdrom "$(ISO)"
 
 qemu: ## Boot the built ISO headless (QEMU, -nographic)
-	@test -f "$(ISO)" || { echo "ISO not found: $(ISO) — run 'make iso' first"; exit 1; }
+	@test -f "$(ISO)" || { echo "ISO not found: $(ISO) — run 'make iso' first;'; exit 1; }
 	@echo "Booting Veldra $(VERSION) in QEMU (headless)..."
 	@qemu-system-x86_64 \
 		-m 1024 \
