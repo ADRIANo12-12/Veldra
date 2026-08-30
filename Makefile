@@ -48,19 +48,19 @@ replit-iso: ## Build a Replit-compatible ISO without Docker/Podman/root
 		github:NixOS/nixpkgs/nixos-unstable#fakeroot \
 		--command bash -lc 'cd "$(ROOT)" && scripts/build-tui.sh && bash build/replit-iso.sh'
 
-replit-qemu: replit-iso ## Boot the Replit-compatible ISO in terminal curses mode using QEMU TCG
-	@command -v nix >/dev/null 2>&1 || { echo "nix is required for replit-qemu"; exit 1; }
-	@nix shell \
-		github:NixOS/nixpkgs/nixos-unstable#xorriso \
-		--command bash -lc 'cd "$(ROOT)" && bash build/replit-curses.sh'
+replit-qemu: replit-iso ## Boot the Replit-compatible ISO in fast terminal curses mode using QEMU TCG
 	@test -f "$(ISO)" || { echo "ISO not found: $(ISO)"; exit 1; }
-	@echo "Booting Veldra $(VERSION) in QEMU/TCG (curses VGA text mode)..."
+	@echo "Booting Veldra $(VERSION) in QEMU/TCG (optimized curses mode)..."
 	@qemu-system-x86_64 \
-		-machine accel=tcg \
+		-machine pc,accel=tcg,thread=multi \
+		-cpu max \
+		-smp 4 \
 		-m 1024 \
 		-display curses \
 		-vga std \
 		-monitor none \
+		-nic none \
+		-boot order=d \
 		$(VELDRA_QEMU_ARGS) \
 		-cdrom "$(ISO)"
 
