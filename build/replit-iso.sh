@@ -5,6 +5,11 @@
 # Copyright (c) 2026 Adrian Sikora
 # All rights reserved.
 # Proprietary and confidential.
+#
+# Replit has no Docker daemon and no root privileges. This compatibility path
+# starts from the official Arch ISO, extracts its live airootfs.sfs, modifies
+# the live tree, and replaces that one member while replaying the original
+# BIOS/UEFI boot metadata.
 
 set -euo pipefail
 
@@ -28,10 +33,10 @@ RUN_ID="${EPOCHSECONDS:-$(date +%s)}-${RANDOM}"
 ROOTFS="${WORK}/rootfs-${RUN_ID}"
 NEW_SFS="${WORK}/veldra-airootfs-${RUN_ID}.sfs"
 
-vd_require curl xorriso unsquashfs mksquashfs fakeroot sha256sum awk sed install mkdir rm du tar
+vd_require curl xorriso unsquashfs mksquashfs sha256sum awk sed install mkdir rm du
 
 vd_info "Replit-compatible Veldra ISO builder — ${VERSION} / ${ARCH}"
-vd_warn "This is a sandbox compatibility build; canonical 'make iso' remains the normal Arch-container pipeline."
+vd_warn "Sandbox compatibility path; canonical 'make iso' remains the Arch-container pipeline."
 
 mkdir -p "$WORK" "$OUT"
 
@@ -53,7 +58,7 @@ if ! xorriso -indev "$ARCH_ISO" -ls "$SFS_PATH" >/dev/null 2>&1; then
     vd_die 1 "official Arch ISO does not contain expected live root: $SFS_PATH"
 fi
 
-rm -f "$SOURCE_SFS"
+rm -f "$SOURCE_SFS" "$NEW_SFS"
 rm -rf "$ROOTFS"
 mkdir -p "$ROOTFS"
 
@@ -62,11 +67,22 @@ xorriso -osirrox on -indev "$ARCH_ISO" \
     -extract "$SFS_PATH" "$SOURCE_SFS" >/dev/null
 [[ -s "$SOURCE_SFS" ]] || vd_die 1 "failed to extract $SFS_PATH"
 
-vd_info "unpacking Arch live rootfs with fakeroot"
-# fakeroot makes UID/GID changes virtual during extraction, so files remain
-# writable by the Replit runner while the guest metadata can still be packed
-# as root-owned in the final SquashFS.
-fakeroot -- unsquashfs -no-xattrs -d "$ROOTFS" "$SOURCE_SFS" >/dev/null
+vd_info "unpacking Arch live rootfs with writable permissions"
+
+# Replit cannot chown/chmod root-owned files restored from a SquashFS image.
+# SquashFS-tools 4.7.6 added extraction-time permission overrides, allowing us
+# to preserve the file contents while making the temporary host tree writable.
+# The final mksquashfs call restores root ownership and sane guest permissions.
+if unsquashfs -help 2>&1 | grep -q -- '-force-file-mode'; then
+    unsquashfs \
+        -no-xattrs \
+        -force-file-mode 'ugo+rX,u+rw' \
+        -force-dir-mode 'ugo+rwx' \
+        -d "$ROOTFS" "$SOURCE_SFS" >/dev/null
+else
+    vd_die 2 "Replit ISO builds require SquashFS tools 4.7.6+; run the target through nixpkgs unstable"
+fi
+
 [[ -d "$ROOTFS/etc" && -d "$ROOTFS/usr" ]] || \
     vd_die 1 "extracted Arch rootfs does not look valid"
 
@@ -79,7 +95,7 @@ fi
 vd_info "installing Veldra TUI into the live rootfs"
 install -D -m 0755 "$TUI_BIN" "$ROOTFS/usr/local/bin/veldra-tui"
 
-vd_info "configuring unprivileged Veldra live user"
+vd_info "configuring Veldra live user"
 install -d -m 0755 "$ROOTFS/home/veldra"
 
 if ! grep -q '^veldra:' "$ROOTFS/etc/passwd"; then
@@ -124,7 +140,12 @@ EOF
 chmod 0644 "$ROOTFS/etc/veldra/replit-build"
 
 vd_info "building modified airootfs.sfs"
-mksquashfs "$ROOTFS" "$NEW_SFS" -comp zstd -noappend -all-root -no-xattrs -no-progress
+mksquashfs "$ROOTFS" "$NEW_SFS" \
+    -comp zstd \
+    -noappend \
+    -all-root \
+    -no-xattrs \
+    -no-progress
 [[ -s "$NEW_SFS" ]] || vd_die 1 "failed to build modified airootfs.sfs"
 
 rm -f "$ISO"
