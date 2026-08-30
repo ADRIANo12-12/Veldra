@@ -28,18 +28,7 @@ RUN_ID="${EPOCHSECONDS:-$(date +%s)}-${RANDOM}"
 ROOTFS="${WORK}/rootfs-${RUN_ID}"
 NEW_SFS="${WORK}/veldra-airootfs-${RUN_ID}.sfs"
 
-# Replit ships an older SquashFS toolset. Automatically re-exec this builder
-# inside the current nixpkgs-unstable squashfsTools package when needed.
-if [[ "${VELDRA_REPLIT_SQUASHFS_REEXEC:-0}" != "1" ]] && command -v nix >/dev/null 2>&1 && command -v unsquashfs >/dev/null 2>&1; then
-    SQUASHFS_VERSION="$(unsquashfs -version 2>&1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1 || true)"
-    if [[ -z "$SQUASHFS_VERSION" ]] || [[ "$(printf '%s\n' "$SQUASHFS_VERSION" "4.7.6" | sort -V | head -n1)" != "4.7.6" ]]; then
-        vd_info "Replit: switching to nixpkgs unstable squashfs-tools"
-        exec nix shell github:NixOS/nixpkgs/nixos-unstable#squashfsTools \
-            --command env VELDRA_REPLIT_SQUASHFS_REEXEC=1 bash "$0" "$@"
-    fi
-fi
-
-vd_require curl xorriso unsquashfs mksquashfs sha256sum awk sed install mkdir rm du
+vd_require curl xorriso unsquashfs mksquashfs fakeroot sha256sum awk sed install mkdir rm du
 
 vd_info "Replit-compatible Veldra ISO builder — ${VERSION} / ${ARCH}"
 vd_warn "Sandbox compatibility path; canonical 'make iso' remains the Arch-container pipeline."
@@ -73,15 +62,11 @@ xorriso -osirrox on -indev "$ARCH_ISO" \
     -extract "$SFS_PATH" "$SOURCE_SFS" >/dev/null
 [[ -s "$SOURCE_SFS" ]] || vd_die 1 "failed to extract $SFS_PATH"
 
-vd_info "unpacking Arch live rootfs with writable permissions"
-if ! unsquashfs -help 2>&1 | grep -q -- '-force-file-mode'; then
-    vd_die 2 "SquashFS 4.7.6+ was not activated; run 'nix shell github:NixOS/nixpkgs/nixos-unstable#squashfsTools --command bash build/replit-iso.sh'"
-fi
-unsquashfs \
-    -no-xattrs \
-    -force-file-mode 'ugo+rX,u+rw' \
-    -force-dir-mode 'ugo+rwx' \
-    -d "$ROOTFS" "$SOURCE_SFS" >/dev/null
+vd_info "unpacking Arch live rootfs with fakeroot"
+# SquashFS 4.7.5 already supports the creator-side -all-root option. We do not
+# require the newer 4.7.6 unsquashfs permission flags: fakeroot virtualises the
+# ownership/mode changes made while extracting the original Arch filesystem.
+fakeroot -- unsquashfs -no-xattrs -d "$ROOTFS" "$SOURCE_SFS" >/dev/null
 [[ -d "$ROOTFS/etc" && -d "$ROOTFS/usr" ]] || \
     vd_die 1 "extracted Arch rootfs does not look valid"
 
