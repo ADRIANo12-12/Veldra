@@ -37,8 +37,7 @@ mkdir -p "$WORK" "$OUT"
 
 if [[ ! -f "$ARCH_ISO" ]]; then
     vd_info "downloading official Arch Linux ${ARCH_RELEASE} ISO (~1.5 GB)"
-    curl -fL --retry 3 --retry-delay 2 --progress-bar \
-        -o "$ARCH_ISO.part" "$ARCH_ISO_URL"
+    curl -fL --retry 3 --retry-delay 2 --progress-bar -o "$ARCH_ISO.part" "$ARCH_ISO_URL"
     mv "$ARCH_ISO.part" "$ARCH_ISO"
 else
     vd_info "using cached Arch ISO: $ARCH_ISO"
@@ -58,14 +57,12 @@ rm -rf "$ROOTFS"
 mkdir -p "$ROOTFS"
 
 vd_info "extracting Arch live rootfs"
-xorriso -osirrox on -indev "$ARCH_ISO" \
-    -extract "$SFS_PATH" "$SOURCE_SFS" >/dev/null
+xorriso -osirrox on -indev "$ARCH_ISO" -extract "$SFS_PATH" "$SOURCE_SFS" >/dev/null
 [[ -s "$SOURCE_SFS" ]] || vd_die 1 "failed to extract $SFS_PATH"
 
 vd_info "unpacking Arch live rootfs with fakeroot"
 fakeroot -- unsquashfs -no-xattrs -d "$ROOTFS" "$SOURCE_SFS" >/dev/null
-[[ -d "$ROOTFS/etc" && -d "$ROOTFS/usr" ]] || \
-    vd_die 1 "extracted Arch rootfs does not look valid"
+[[ -d "$ROOTFS/etc" && -d "$ROOTFS/usr" ]] || vd_die 1 "extracted Arch rootfs does not look valid"
 
 TUI_BIN="${VELDRA_PROJECT_ROOT}/tui/bin/veldra-tui"
 if [[ ! -x "$TUI_BIN" ]]; then
@@ -79,8 +76,6 @@ install -D -m 0755 "$TUI_BIN" "$ROOTFS/usr/local/bin/veldra-tui"
 vd_info "configuring Veldra live user"
 install -d -m 0755 "$ROOTFS/home/veldra"
 
-# Replace the passwd/group/shadow entries atomically because these files can
-# intentionally be unreadable/writable by the build user after extraction.
 if ! grep -q '^veldra:' "$ROOTFS/etc/passwd"; then
     PASSWD_TMP="$ROOTFS/etc/.passwd.veldra.tmp"
     cat "$ROOTFS/etc/passwd" > "$PASSWD_TMP"
@@ -105,11 +100,7 @@ if [[ -f "$ROOTFS/etc/shadow" ]] && ! grep -q '^veldra:' "$ROOTFS/etc/shadow"; t
     mv -f "$SHADOW_TMP" "$ROOTFS/etc/shadow"
 fi
 
-# Do not depend on /etc/profile.d for starting the UI. The live console may be
-# serial (-nographic) or VGA/tty1 (-display curses). Start the UI directly on
-# each possible console through systemd, and let the active console win.
 vd_info "configuring Veldra console services"
-
 install -d -m 0755 "$ROOTFS/etc/systemd/system"
 
 cat > "$ROOTFS/etc/systemd/system/veldra-tui-tty1.service" <<'EOF'
@@ -157,21 +148,19 @@ RestartSec=1
 WantedBy=multi-user.target
 EOF
 
-# The TUI owns the consoles in this live image, so disable the gettys that
-# would otherwise compete for the same TTYs. No init-time chroot/systemctl is
-# needed: these are ordinary systemd unit symlinks in the guest filesystem.
 ln -sfn /dev/null "$ROOTFS/etc/systemd/system/getty@tty1.service"
 ln -sfn /dev/null "$ROOTFS/etc/systemd/system/serial-getty@ttyS0.service"
-
 install -d -m 0755 "$ROOTFS/etc/systemd/system/multi-user.target.wants"
-ln -sfn ../veldra-tui-tty1.service \
-    "$ROOTFS/etc/systemd/system/multi-user.target.wants/veldra-tui-tty1.service"
-ln -sfn ../veldra-tui-serial.service \
-    "$ROOTFS/etc/systemd/system/multi-user.target.wants/veldra-tui-serial.service"
-
-# Remove the old shell-based launcher. The systemd units above are the single
-# source of truth for starting the TUI.
+ln -sfn ../veldra-tui-tty1.service "$ROOTFS/etc/systemd/system/multi-user.target.wants/veldra-tui-tty1.service"
+ln -sfn ../veldra-tui-serial.service "$ROOTFS/etc/systemd/system/multi-user.target.wants/veldra-tui-serial.service"
 rm -f "$ROOTFS/etc/profile.d/veldra.sh"
+
+# systemd must not repaint the terminal over the fullscreen Bubble Tea UI.
+install -d -m 0755 "$ROOTFS/etc/systemd/system.conf.d"
+cat > "$ROOTFS/etc/systemd/system.conf.d/90-veldra-tui.conf" <<'EOF'
+[Manager]
+ShowStatus=no
+EOF
 
 install -d -m 0755 "$ROOTFS/etc/veldra"
 cat > "$ROOTFS/etc/veldra/replit-build" <<EOF
@@ -179,6 +168,7 @@ Veldra ${VERSION}
 Build backend: replit-iso
 Base image: Arch Linux ${ARCH_RELEASE}
 Console backend: systemd tty1 + ttyS0
+UI: Veldra Shell fullscreen
 EOF
 chmod 0644 "$ROOTFS/etc/veldra/replit-build"
 
