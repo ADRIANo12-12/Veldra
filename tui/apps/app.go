@@ -3,22 +3,19 @@
 // All rights reserved.
 // Proprietary and confidential.
 //
-// Package apps is the Veldra TUI program itself: a full-screen Bubble Tea
-// application with a macOS-inspired top bar, central window, bottom dock and
-// status information. It hosts five real applications: Terminal, Files,
-// Editor, Settings and Task Manager. Everything shown is gathered from the
-// live system at runtime.
+// Root model for the Veldra terminal desktop shell.
 
 package apps
 
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"veldra/tui/editor"
@@ -28,83 +25,74 @@ import (
 	"veldra/tui/ui"
 )
 
-// Application identifiers.
 const (
-	AppTerminal = 0
-	AppFiles    = 1
-	AppEditor   = 2
-	AppSettings = 3
-	AppTasks    = 4
+	AppTerminal = iota
+	AppFiles
+	AppEditor
+	AppSettings
+	AppTasks
 )
 
-// dockLabels are the five dock applications.
-var dockLabels = []string{"Terminal", "Pliki", "Edytor", "Ustawienia", "Menedżer Zadań"}
+var appLabels = []string{"Terminal", "Files", "Editor", "Settings", "Tasks"}
 
-// EditorTargetOverride, when set, tells the Editor app to open a specific
-// real file (used by `veldra-tui --editor <file>`).
+// EditorTargetOverride, when set, tells the Editor app to open a specific file.
 var EditorTargetOverride string
 
-// Model is the root Bubble Tea model.
 type Model struct {
-	theme   ui.Theme
-	styles  ui.Styles
-	active  int
-	width   int
-	height  int
-	ready   bool
+	theme  ui.Theme
+	styles ui.Styles
+	active int
+	width  int
+	height int
+	ready  bool
 
-	// application states
-	term     string // terminal panel text (rendered lazily)
-	sysInfo  system.Info
-	fs       *files.Browser
-	buf      *editor.Buffer
-	edView   editor.ViewWindow
-	settings string
-	tasks    *taskmanager.Collector
+	sysInfo system.Info
+	fs      *files.Browser
+	buf     *editor.Buffer
+	edView  editor.ViewWindow
+	tasks   *taskmanager.Collector
 	lastTask []taskmanager.Process
 
-	// editor sub-mode (true = typing when selected)
 	insertMode bool
-	edTop      int
 
-	// status
+	terminalInput   string
+	terminalHistory []string
+	terminalPos     int
+	terminalOut     []string
+
 	quitting bool
 	errMsg   string
 	savedMsg string
-	deadline time.Time
 }
 
-// NewModel constructs the root model with live system data.
 func NewModel(startDir, startFile string) *Model {
 	m := &Model{
-		theme:  ui.VeldraDark(),
-		active: AppTerminal,
+		theme:   ui.VeldraDark(),
+		active:  AppTerminal,
 		sysInfo: system.Current(),
+		terminalOut: []string{
+			"Veldra Shell 0.0.1-pre-alpha",
+			"Terminal ready. Type commands below.",
+		},
 	}
 	m.styles = ui.NewStyles(m.theme)
+
 	if startDir == "" {
 		if h, err := os.UserHomeDir(); err == nil {
 			startDir = h
 		}
 	}
 	m.fs = files.NewBrowser(startDir)
+	m.buf = editor.NewBuffer(startFile)
 	if startFile != "" {
-		m.buf = editor.NewBuffer(startFile)
 		m.active = AppEditor
-	} else {
-		m.buf = editor.NewBuffer("")
-		m.sysInfo = system.Current()
 	}
 	m.tasks = taskmanager.NewCollector()
 	m.lastTask = m.tasks.Refresh()
-	m.deadline = time.Time{}
 	return m
 }
 
-// Init starts any async commands.
-func (m *Model) Init() tea.Cmd {
-	return tick()
-}
+func (m *Model) Init() tea.Cmd { return tick() }
 
 func tick() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return refreshMsg{} })
@@ -112,20 +100,20 @@ func tick() tea.Cmd {
 
 type refreshMsg struct{}
 
-// --- View-mode keys --------------------------------------------------------
-
 func (m *Model) handleKey(km tea.KeyMsg) {
+	if m.active == AppTerminal {
+		if m.terminalHandleKey(km) {
+			return
+		}
+	}
+
 	switch km.String() {
-	case "q", "ctrl+c":
+	case "ctrl+q", "ctrl+c":
 		m.quitting = true
-	case "left":
+	case "tab", "right":
+		m.selectNext()
+	case "shift+tab", "left":
 		m.selectPrev()
-	case "right":
-		m.selectNext()
-	case "tab":
-		m.selectNext()
-	case "enter":
-		m.activate()
 	case "1":
 		m.setActive(AppTerminal)
 	case "2":
@@ -136,19 +124,116 @@ func (m *Model) handleKey(km tea.KeyMsg) {
 		m.setActive(AppSettings)
 	case "5":
 		m.setActive(AppTasks)
+	case "r":
+		m.refresh()
+	case "enter":
+		m.activate()
 	default:
-		// pass keys to the active application
 		m.forwardKey(km)
 	}
 }
 
-func (m *Model) selectPrev() {
-	m.active = (m.active - 1 + len(dockLabels)) % len(dockLabels)
+func (m *Model) terminalHandleKey(km tea.KeyMsg) bool {
+	s := km.String()
+	switch s {
+	case "ctrl+q":
+		m.quitting = true
+		return true
+	case "enter":
+		m.runTerminalCommand()
+		return true
+	case "backspace":
+		if len(m.terminalInput) > 0 {
+			m.terminalInput = m.terminalInput[:len(m.terminalInput)-1]
+		}
+		return true
+	case "up":
+		if len(m.terminalHistory) > 0 {
+			if m.terminalPos < len(m.terminalHistory) {
+				m.terminalPos++
+			}
+			m.terminalInput = historyAt(m.terminalHistory, m.terminalPos)
+		}
+		return true
+	case "down":
+		if m.terminalPos > 0 {
+			m.terminalPos--
+			m.terminalInput = historyAt(m.terminalHistory, m.terminalPos)
+		} else {
+			m.terminalInput = ""
+		}
+		return true
+	case "esc":
+		m.terminalInput = ""
+		return true
+	}
+	if s == "q" && m.terminalInput == "" {
+		m.quitting = true
+		return true
+	}
+	if len(km.Runes) == 1 && km.Type == tea.KeyRunes {
+		m.terminalInput += string(km.Runes)
+		return true
+	}
+	return false
 }
 
-func (m *Model) selectNext() {
-	m.active = (m.active + 1) % len(dockLabels)
+func historyAt(history []string, pos int) string {
+	if len(history) == 0 || pos <= 0 || pos > len(history) {
+		return ""
+	}
+	return history[len(history)-pos]
 }
+
+func (m *Model) runTerminalCommand() {
+	command := strings.TrimSpace(m.terminalInput)
+	if command == "" {
+		m.terminalOut = append(m.terminalOut, m.prompt()+" ")
+		m.terminalInput = ""
+		return
+	}
+	m.terminalHistory = append(m.terminalHistory, command)
+	m.terminalPos = 0
+	m.terminalOut = append(m.terminalOut, m.prompt()+" "+command)
+
+	cmd := exec.Command("bash", "-lc", command)
+	cmd.Dir = m.terminalDir()
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor")
+	out, err := cmd.CombinedOutput()
+	if len(out) > 0 {
+		for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+			m.terminalOut = append(m.terminalOut, line)
+		}
+	}
+	if err != nil {
+		m.terminalOut = append(m.terminalOut, m.styles.Error.Render(err.Error()))
+	}
+	if len(m.terminalOut) > 500 {
+		m.terminalOut = m.terminalOut[len(m.terminalOut)-500:]
+	}
+	m.terminalInput = ""
+}
+
+func (m *Model) terminalDir() string {
+	if m.fs != nil && m.fs.Path != "" {
+		return m.fs.Path
+	}
+	if dir, err := os.UserHomeDir(); err == nil {
+		return dir
+	}
+	return "/"
+}
+
+func (m *Model) prompt() string {
+	user := m.sysInfo.CurrentUser
+	if user == "" {
+		user = "veldra"
+	}
+	return fmt.Sprintf("%s@%s:%s$", user, m.sysInfo.Hostname, m.terminalDir())
+}
+
+func (m *Model) selectPrev() { m.active = (m.active + len(appLabels) - 1) % len(appLabels) }
+func (m *Model) selectNext() { m.active = (m.active + 1) % len(appLabels) }
 
 func (m *Model) setActive(i int) {
 	m.active = i
@@ -157,11 +242,15 @@ func (m *Model) setActive(i int) {
 	}
 }
 
-func (m *Model) activate() {
-	m.setActive(m.active)
+func (m *Model) activate() { m.setActive(m.active) }
+
+func (m *Model) refresh() {
+	m.sysInfo = system.Current()
+	if m.active == AppTasks {
+		m.lastTask = m.tasks.Refresh()
+	}
 }
 
-// forwardKey sends a key to the focused application.
 func (m *Model) forwardKey(km tea.KeyMsg) {
 	switch m.active {
 	case AppFiles:
@@ -170,12 +259,8 @@ func (m *Model) forwardKey(km tea.KeyMsg) {
 		m.editorKey(km)
 	case AppTasks:
 		m.taskKey(km)
-	case AppSettings:
-		// no inside-app keys for settings yet
 	}
 }
-
-// --- Sub-application key handlers -------------------------------------------
 
 func (m *Model) filesKey(km tea.KeyMsg) {
 	switch km.String() {
@@ -204,158 +289,96 @@ func (m *Model) editorKey(km tea.KeyMsg) {
 		return
 	}
 	switch km.String() {
-	case "up":
-		m.edView.CursorRow--
-	case "down":
-		m.edView.CursorRow++
-	case "pgup":
-		m.edView.CursorRow -= 10
-	case "pgdown":
-		m.edView.CursorRow += 10
-	case "left":
-		if m.edView.CursorCol > 0 {
-			m.edView.CursorCol--
-		}
-	case "right":
-		m.edView.CursorCol++
-	case "home":
-		m.edView.CursorCol = 0
-	case "i":
-		m.insertMode = true
-	case "ctrl+s":
-		if err := m.buf.Save(); err != nil {
-			m.errMsg = "save failed: " + err.Error()
-		} else {
-			m.savedMsg = "saved " + m.buf.Path
-		}
+	case "up": m.edView.CursorRow--
+	case "down": m.edView.CursorRow++
+	case "pgup": m.edView.CursorRow -= 10
+	case "pgdown": m.edView.CursorRow += 10
+	case "left": if m.edView.CursorCol > 0 { m.edView.CursorCol-- }
+	case "right": m.edView.CursorCol++
+	case "home": m.edView.CursorCol = 0
+	case "i": m.insertMode = true
+	case "ctrl+s": m.saveEditor()
 	case "enter":
 		if m.edView.CursorRow < m.buf.Len() && m.buf.SplitLine(m.edView.CursorRow, m.edView.CursorCol) {
 			m.edView.CursorRow++
 			m.edView.CursorCol = 0
-		}
-	case "f":
-		// quick find: jump to "package " or first non-empty line
-		if i := m.buf.Find("package"); i >= 0 {
-			m.edView.CursorRow = i
 		}
 	}
 }
 
 func (m *Model) editorEditKey(km tea.KeyMsg) {
 	switch km.String() {
-	case "escape", "ctrl+c":
-		m.insertMode = false
+	case "escape", "ctrl+c": m.insertMode = false
 	case "enter":
 		if m.buf.SplitLine(m.edView.CursorRow, m.edView.CursorCol) {
 			m.edView.CursorRow++
 			m.edView.CursorCol = 0
 		}
 	case "backspace":
-		if m.edView.CursorCol > 0 {
-			m.buf.DeleteAt(m.edView.CursorRow, m.edView.CursorCol-1)
-			m.edView.CursorCol--
-		}
-	case "ctrl+s":
-		if err := m.buf.Save(); err != nil {
-			m.errMsg = "save failed: " + err.Error()
-		} else {
-			m.savedMsg = "saved " + m.buf.Path
-		}
+		if m.edView.CursorCol > 0 { m.buf.DeleteAt(m.edView.CursorRow, m.edView.CursorCol-1); m.edView.CursorCol-- }
+	case "ctrl+s": m.saveEditor()
 	default:
-		if len(km.String()) == 1 {
-			m.buf.InsertAt(m.edView.CursorRow, m.edView.CursorCol, km.String())
+		if len(km.Runes) == 1 && km.Type == tea.KeyRunes {
+			m.buf.InsertAt(m.edView.CursorRow, m.edView.CursorCol, string(km.Runes[0]))
 			m.edView.CursorCol++
 		}
 	}
 }
 
-func (m *Model) taskKey(km tea.KeyMsg) {
-	// no custom task-manager keys for now; view refreshes on a timer
+func (m *Model) saveEditor() {
+	if err := m.buf.Save(); err != nil { m.errMsg = "save failed: " + err.Error(); return }
+	m.savedMsg = "saved " + m.buf.Path
 }
 
-// --- Mouse ------------------------------------------------------------------
+func (m *Model) taskKey(km tea.KeyMsg) {}
 
 func (m *Model) handleMouse(me tea.MouseMsg) {
-	if me.Action != tea.MouseActionPress {
-		return
-	}
-	x, y := me.X, me.Y
-	// Dock is the bottom row(s). If the click y is within the dock band,
-	// activate the dock item under it.
-	if y >= m.height-2 && y <= m.height-1 {
-		idx := m.dockItemAt(x)
-		if idx >= 0 {
-			m.setActive(idx)
-		}
+	if me.Action != tea.MouseActionPress { return }
+	if me.Y == 0 {
+		idx := m.topBarAppAt(me.X)
+		if idx >= 0 { m.setActive(idx) }
 	}
 }
 
-// dockItemAt maps an x coordinate to a dock item, mirroring the layout math
-// in View().
-func (m *Model) dockItemAt(x int) int {
-	var cursor int
-	for i, label := range dockLabels {
-		cell := dockItemCell(i, label)
-		width := lipgloss.Width(cell)
-		end := cursor + width
-		if x >= cursor && x < end+1 {
-			return i
-		}
-		cursor = end + 2 // item + spacing
+func (m *Model) topBarAppAt(x int) int {
+	cursor := 1
+	for i := range appLabels {
+		cell := fmt.Sprintf(" %d:%s ", i+1, appLabels[i])
+		w := lipgloss.Width(cell)
+		if x >= cursor && x < cursor+w { return i }
+		cursor += w + 1
 	}
 	return -1
 }
 
-func dockItemCell(i int, label string) string {
-	return fmt.Sprintf("[%d] %s", i+1, label)
-}
-
-// --- Update -----------------------------------------------------------------
-
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+		m.width, m.height = msg.Width, msg.Height
 		m.ready = true
 	case tea.KeyMsg:
 		m.handleKey(msg)
-		if m.quitting {
-			return m, tea.Quit
-		}
+		if m.quitting { return m, tea.Quit }
 	case tea.MouseMsg:
 		m.handleMouse(msg)
 	case refreshMsg:
-		if m.active == AppTasks {
-			m.lastTask = m.tasks.Refresh()
-		}
-		if m.active == AppTerminal {
-			m.sysInfo = system.Current()
-		}
-		if m.active == AppSettings {
-			m.settings = ""
-		}
+		m.refresh()
 		return m, tick()
 	}
-	m.edView.Clamp(m.buf, m.editorHeight())
+	if m.buf != nil {
+		m.edView.Clamp(m.buf, m.editorHeight())
+	}
 	return m, nil
 }
 
 func (m *Model) editorHeight() int {
-	h := m.height - 2 - 4 // top bar, dock, borders, status
-	if h < 3 {
-		h = 3
-	}
-	return h - 3
+	h := m.height - 6
+	if h < 3 { h = 3 }
+	return h
 }
-
-// --- Quit -------------------------------------------------------------------
 
 func (m *Model) Quitting() bool { return m.quitting }
 
-func strconvToInt(s string) int {
-	n, _ := strconv.Atoi(s)
-	return n
-}
+func strconvToInt(s string) int { n, _ := strconv.Atoi(s); return n }
 
 var _ = strings.TrimSpace
