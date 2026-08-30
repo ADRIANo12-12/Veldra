@@ -40,8 +40,11 @@ container: ## Build/refresh the isolated Arch build container image
 qemu: ## Boot the built ISO headless (QEMU, -nographic)
 	@test -f "$(ISO)" || { echo "ISO not found: $(ISO) — run 'make iso' first"; exit 1; }
 	@echo "Booting Veldra $(VERSION) in QEMU (headless)..."
-	@test -n "$${VELDRA_QEMU_ARGS}" && VELDRA_EXTRA="$${VELDRA_QEMU_ARGS}" || VELDRA_EXTRA="-m 1024 -nographic"
-	@qemu-system-x86_64 $(VELDRA_EXTRA) -cdrom "$(ISO)"
+	@qemu-system-x86_64 \
+		-m 1024 \
+		-nographic \
+		$(VELDRA_QEMU_ARGS) \
+		-cdrom "$(ISO)"
 
 # --- verification ----------------------------------------------------------
 test: ## Run the Go unit tests
@@ -64,7 +67,7 @@ lint: ## Lint the shell scripts (shellcheck)
 	shellcheck -S warning scripts/*.sh build/*.sh build/container/*.sh system/*.sh boot/*.sh
 
 fmt: ## Format the Go source
-	cd $(ROOT)/tui && gofmt -l . | grep -v '^$' || true
+	cd $(ROOT)/tui && gofmt -l . | grep -v '^$$' || true
 	cd $(ROOT)/tui && gofmt -w .
 
 # --- clean ----------------------------------------------------------------
