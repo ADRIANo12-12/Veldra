@@ -34,12 +34,10 @@ ARCH_ISO_URL="https://geo.mirror.pkgbuild.com/iso/${ARCH_RELEASE}/${ARCH_ISO_NAM
 ARCH_ISO_SHA256="4e82dced1c4fd3e498b22a853f8db2a4d262d32b97e7e07d97390d9e425ffe5e"
 ARCH_ISO="${WORK}/${ARCH_ISO_NAME}"
 SOURCE_SFS="${WORK}/airootfs.sfs"
-# unsquashfs restores the original numeric owners. That is correct for an ISO,
-# but those owners are not writable by Replit's runner user. Use a new, unique
-# extraction directory for each run, then normalize the tree through tar into
-# a runner-owned directory before editing it. The old extraction is left
-# untouched because an unprivileged process cannot recursively remove its
-# root-owned entries.
+# unsquashfs restores the original numeric owners. Those owners are correct
+# for an ISO but can make source files unwritable in Replit. Use a fresh
+# extraction directory for every run, then normalize through tar into a new
+# runner-owned tree before editing it. We never need to remove root-owned files.
 RUN_ID="${EPOCHSECONDS:-$(date +%s)}-${RANDOM}"
 EXTRACT_ROOTFS="${WORK}/rootfs-extract-${RUN_ID}"
 ROOTFS="${WORK}/rootfs-${RUN_ID}"
@@ -88,9 +86,10 @@ unsquashfs -no-xattrs -d "$EXTRACT_ROOTFS" "$SOURCE_SFS" >/dev/null
 [[ -d "$EXTRACT_ROOTFS/etc" && -d "$EXTRACT_ROOTFS/usr" ]] || \
     vd_die 1 "extracted Arch rootfs does not look valid"
 
-# Normalize the extracted tree into a runner-owned directory. This avoids
-# mutating or deleting root-owned files restored from the source SquashFS.
 vd_info "normalizing rootfs ownership for the Replit sandbox"
+# GNU tar creates destination files as the invoking user while --no-same-owner
+# ignores numeric UID/GID stored in the source archive. This avoids touching
+# root-owned source files after unsquashfs has produced them.
 tar -C "$EXTRACT_ROOTFS" -cf - . \
     | tar -C "$ROOTFS" --no-same-owner --no-same-permissions -xf -
 
