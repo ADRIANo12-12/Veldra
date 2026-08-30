@@ -39,7 +39,7 @@ container: ## Build/refresh the isolated Arch build container image
 
 replit-iso: tui ## Build a Replit-compatible ISO without Docker/Podman/root
 	@command -v nix >/dev/null 2>&1 || { echo "nix is required for replit-iso"; exit 1; }
-	@nix shell nixpkgs#xorriso nixpkgs#squashfsTools --command bash -c 'cd "$(ROOT)" && bash build/replit-iso.sh'
+	@nix shell github:NixOS/nixpkgs/nixos-unstable#xorriso github:NixOS/nixpkgs/nixos-unstable#squashfsTools --command bash -c 'cd "$(ROOT)" && exec bash build/replit-iso.sh'
 
 replit-qemu: replit-iso ## Boot the Replit-compatible ISO headless using QEMU TCG
 	@test -f "$(ISO)" || { echo "ISO not found: $(ISO)"; exit 1; }
