@@ -5,16 +5,6 @@
 # Copyright (c) 2026 Adrian Sikora
 # All rights reserved.
 # Proprietary and confidential.
-#
-# Replit does not expose Docker/Podman daemons or root privileges. Instead of
-# building an Arch rootfs from scratch, this backend takes the current
-# official Arch Linux installation ISO, replaces its live airootfs.sfs with a
-# SquashFS containing the Veldra TUI and autologin setup, then rewrites the ISO
-# while preserving the original BIOS/UEFI boot metadata.
-#
-# The SquashFS extraction runs under fakeroot: ownership changes requested by
-# unsquashfs are virtual, so Replit's runner remains the real owner of the
-# extracted files. The repacked SquashFS is then forced to root ownership.
 
 set -euo pipefail
 
@@ -38,7 +28,7 @@ RUN_ID="${EPOCHSECONDS:-$(date +%s)}-${RANDOM}"
 ROOTFS="${WORK}/rootfs-${RUN_ID}"
 NEW_SFS="${WORK}/veldra-airootfs-${RUN_ID}.sfs"
 
-vd_require curl xorriso unsquashfs mksquashfs fakeroot sha256sum awk sed install mkdir rm du
+vd_require curl xorriso unsquashfs mksquashfs fakeroot sha256sum awk sed install mkdir rm du tar
 
 vd_info "Replit-compatible Veldra ISO builder — ${VERSION} / ${ARCH}"
 vd_warn "This is a sandbox compatibility build; canonical 'make iso' remains the normal Arch-container pipeline."
@@ -63,7 +53,7 @@ if ! xorriso -indev "$ARCH_ISO" -ls "$SFS_PATH" >/dev/null 2>&1; then
     vd_die 1 "official Arch ISO does not contain expected live root: $SFS_PATH"
 fi
 
-rm -f "$SOURCE_SFS" "$NEW_SFS"
+rm -f "$SOURCE_SFS"
 rm -rf "$ROOTFS"
 mkdir -p "$ROOTFS"
 
@@ -73,9 +63,9 @@ xorriso -osirrox on -indev "$ARCH_ISO" \
 [[ -s "$SOURCE_SFS" ]] || vd_die 1 "failed to extract $SFS_PATH"
 
 vd_info "unpacking Arch live rootfs with fakeroot"
-# fakeroot intercepts ownership-changing syscalls made by unsquashfs. The
-# extracted files therefore remain physically owned by runner even though the
-# virtual metadata says root:root. This permits later edits without host root.
+# fakeroot makes UID/GID changes virtual during extraction, so files remain
+# writable by the Replit runner while the guest metadata can still be packed
+# as root-owned in the final SquashFS.
 fakeroot -- unsquashfs -no-xattrs -d "$ROOTFS" "$SOURCE_SFS" >/dev/null
 [[ -d "$ROOTFS/etc" && -d "$ROOTFS/usr" ]] || \
     vd_die 1 "extracted Arch rootfs does not look valid"
@@ -118,8 +108,6 @@ EOF
 
 install -d -m 0755 "$ROOTFS/etc/profile.d"
 cat > "$ROOTFS/etc/profile.d/veldra.sh" <<'EOF'
-# Start the Veldra TUI automatically on the first local virtual terminal.
-# Do not interfere with SSH, serial consoles, or non-interactive shells.
 if [[ -t 1 && "$(tty 2>/dev/null || true)" == "/dev/tty1" && -z "${VELDRA_TUI_ACTIVE:-}" ]]; then
     export VELDRA_TUI_ACTIVE=1
     exec /usr/local/bin/veldra-tui
