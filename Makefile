@@ -14,9 +14,9 @@ ISO     := build/out/veldra-$(VERSION)-$(ARCH).iso
 all: help
 
 help: ## Show available targets
-	@printf 'Veldra $(VERSION) — development targets\n\n'
+	@printf 'Veldra $(VERSION) — development targets\\n\\n'
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) \
-		| awk -F ':.*## ' '{printf "  \033[1;36m%-14s\033[0m %s\n", $$1, $$2}'
+		| awk -F ':.*## ' '{printf "  \\033[1;36m%-14s\\033[0m %s\\n", $$1, $$2}'
 
 # --- build ----------------------------------------------------------------
 plan: ## Print the end-to-end build plan (builds nothing)
@@ -48,19 +48,18 @@ replit-iso: ## Build a Replit-compatible ISO without Docker/Podman/root
 		github:NixOS/nixpkgs/nixos-unstable#fakeroot \
 		--command bash -lc 'cd "$(ROOT)" && scripts/build-tui.sh && bash build/replit-iso.sh'
 
-replit-qemu: replit-iso ## Boot the Replit-compatible ISO in fast terminal curses mode using QEMU TCG
+replit-qemu: replit-iso ## Boot the Replit-compatible ISO in terminal curses mode using QEMU TCG
 	@test -f "$(ISO)" || { echo "ISO not found: $(ISO)"; exit 1; }
 	@echo "Booting Veldra $(VERSION) in QEMU/TCG (optimized curses mode)..."
 	@qemu-system-x86_64 \
-		-machine pc,accel=tcg,thread=multi \
+		-machine pc \
+		-accel tcg,thread=multi \
 		-cpu max \
 		-smp 4 \
 		-m 1024 \
 		-display curses \
 		-vga std \
 		-monitor none \
-		-nic none \
-		-boot order=d \
 		$(VELDRA_QEMU_ARGS) \
 		-cdrom "$(ISO)"
 
