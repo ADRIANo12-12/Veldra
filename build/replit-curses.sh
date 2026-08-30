@@ -20,14 +20,10 @@ INITRD="$WORK/initramfs-linux.img"
 
 vd_require xorriso mkdir rm test qemu-system-x86_64
 [[ -s "$ISO" ]] || vd_die 1 "Replit ISO not found: $ISO"
-
 mkdir -p "$WORK"
 
 vd_info "preparing Veldra for QEMU curses"
 
-# ArchISO places the live kernel and initramfs under arch/boot/x86_64.
-# Boot them directly so QEMU can pass nomodeset without relying on a
-# particular GRUB/Syslinux layout inside the ISO.
 for kernel_path in \
     /arch/boot/x86_64/vmlinuz-linux \
     /arch/boot/x86_64/vmlinuz-linux-lts; do
@@ -37,7 +33,6 @@ for kernel_path in \
     fi
     rm -f "$KERNEL"
 done
-
 [[ -s "$KERNEL" ]] || vd_die 1 "could not extract an ArchISO kernel"
 
 for initrd_path in \
@@ -49,17 +44,17 @@ for initrd_path in \
     fi
     rm -f "$INITRD"
 done
-
 [[ -s "$INITRD" ]] || vd_die 1 "could not extract an ArchISO initramfs"
 
-# The Arch live system discovers its squashfs on the attached CD using the
-# standard archiso parameters. nomodeset keeps the guest on VGA text mode,
-# which is exactly what QEMU's curses display can render.
-APPEND="archisobasedir=arch archisolabel=ARCH_202608 nomodeset console=tty1"
+# Keep the guest on a text console and suppress boot chatter so Bubble Tea
+# owns the terminal instead of systemd status messages repainting the screen.
+APPEND="archisobasedir=arch archisolabel=ARCH_202608 nomodeset quiet loglevel=0 systemd.show_status=false rd.systemd.show_status=false console=tty1"
 
 vd_info "booting Veldra with QEMU curses (VGA text mode)"
 exec qemu-system-x86_64 \
     -machine accel=tcg \
+    -cpu max \
+    -smp 4 \
     -m 1024 \
     -kernel "$KERNEL" \
     -initrd "$INITRD" \
