@@ -19,6 +19,7 @@
 #   --user NAME         primary user to create
 #   --hostname NAME     hostname (default: veldra)
 #   --skip-chroot       only pacstrap + stage layers (no grub/initramfs)
+#   --dry-run           print the resolved install plan and make no changes
 #   --help              this text
 #
 # Environment (hands-free mode):
@@ -41,6 +42,7 @@ VD_ROOT_PASSWD="${VD_ROOT_PASSWD:-}"
 VD_HOSTNAME="${VD_HOSTNAME:-veldra}"
 VD_TIMEZONE="${VD_TIMEZONE:-UTC}"
 VD_LOCALE="${VD_LOCALE:-en_US.UTF-8}"
+VD_DRY_RUN=0
 
 usage() {
     sed -n 's/^#   //p' "${BASH_SOURCE[0]}" | sed -n '/--help/,$p'
@@ -52,10 +54,30 @@ while [[ $# -gt 0 ]]; do
         --user) VD_USER="${2:-}"; shift 2 ;;
         --hostname) VD_HOSTNAME="${2:-}"; shift 2 ;;
         --skip-chroot) VD_SKIP_CHROOT=1; shift ;;
+        --dry-run) VD_DRY_RUN=1; shift ;;
         --help|-h) usage; exit 0 ;;
         *) vd_die 1 "unknown option '$1' (see --help)" ;;
     esac
 done
+
+if (( VD_DRY_RUN )); then
+    disk="${VD_DISK:-${VD_DISK_ARG:-"(interactive)"}}"
+    user="${VD_USER:-"(none)"}"
+    chroot_mode="enabled"
+    [[ "$VD_SKIP_CHROOT" == 1 ]] && chroot_mode="skipped"
+    echo
+    echo "Veldra installer — dry run"
+    echo "  disk      : $disk"
+    echo "  user      : $user"
+    echo "  hostname  : $VD_HOSTNAME"
+    echo "  timezone  : $VD_TIMEZONE"
+    echo "  locale    : $VD_LOCALE"
+    echo "  partition : $VD_PART_MODE"
+    echo "  chroot    : $chroot_mode"
+    echo
+    echo "No disk will be partitioned, formatted, mounted or erased."
+    exit 0
+fi
 
 vd_install_prereqs
 vd_install_src_require VD_SRC

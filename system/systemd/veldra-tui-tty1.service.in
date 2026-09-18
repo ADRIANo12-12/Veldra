@@ -1,7 +1,7 @@
-// Veldra
-// Copyright (c) 2026 Adrian Sikora
-// All rights reserved.
-// Proprietary and confidential.
+# Veldra
+# Copyright (c) 2026 Adrian Sikora
+# All rights reserved.
+# Proprietary and confidential.
 
 [Unit]
 Description=Veldra Terminal Shell on tty1

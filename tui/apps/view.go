@@ -17,20 +17,20 @@ import (
 )
 
 func (m *Model) View() string {
-    if !m.ready {
-        return "Veldra Shell — initializing…"
-    }
-    if m.width < 60 || m.height < 12 {
-        return m.viewCompact()
-    }
+    if !m.ready { return "Veldra Shell — initializing…" }
+    if m.width < 60 || m.height < 12 { return m.viewCompact() }
     top := m.viewTopBar()
-    bodyHeight := m.height - lipgloss.Height(top)
-    if bodyHeight < 1 { return top }
+    bottom := m.viewBottomBar()
+    bodyHeight := m.height - lipgloss.Height(top) - lipgloss.Height(bottom)
+    if bodyHeight < 3 { return lipgloss.JoinVertical(lipgloss.Left, top, bottom) }
     body := m.viewWorkspace(bodyHeight)
-    if m.paletteOpen {
-        body = m.viewPalette(bodyHeight)
-    }
-    return lipgloss.JoinVertical(lipgloss.Left, top, body)
+    if m.paletteOpen { body = m.viewPalette(bodyHeight) }
+    return lipgloss.JoinVertical(lipgloss.Left, top, body, bottom)
+}
+
+func (m *Model) viewBottomBar() string {
+    text := "  Ctrl+1 Terminal  ·  Ctrl+2 Files  ·  Ctrl+3 Editor  ·  Ctrl+4 Settings  ·  Ctrl+5 Tasks  ·  Ctrl+P Launcher  ·  Ctrl+Q Quit  "
+    return m.styles.BottomBar.Width(m.width).Render(text)
 }
 
 func (m *Model) viewTopBar() string {
@@ -213,36 +213,36 @@ func (m *Model) renderEditor() string {
 }
 
 func (m *Model) renderSettings() string {
-	info := m.sysInfo
-	var b strings.Builder
-	b.WriteString(m.styles.Section.Render("SYSTEM CENTER")+"\n")
-	b.WriteString(row("OS", info.OSPretty))
-	b.WriteString(row("Veldra", info.Version+" • "+info.Channel+" • "+info.Status))
-	b.WriteString(row("Kernel", info.KernelFull))
-	b.WriteString(row("CPU", info.CPUModel))
-	b.WriteString(row("Cores", fmt.Sprintf("%d", info.CPUCores)))
-	b.WriteString(row("Memory", fmt.Sprintf("%s / %s MiB", mib(info.MemTotal-info.MemAvailable), mib(info.MemTotal))))
-	b.WriteString(row("Hostname", info.Hostname))
-	b.WriteString(row("User", info.CurrentUser))
-	b.WriteString(row("Shell", info.Shell))
-	b.WriteString(row("Uptime", info.Uptime))
-	b.WriteString("\n"+m.styles.Section.Render("NETWORK")+"\n")
-	if len(info.Interfaces) == 0 {
-		b.WriteString(row("Interfaces", "none"))
-	} else {
-		for _, n := range info.Interfaces {
-			state := n.State
-			if n.HasIP { state += " • " + strings.Join(n.Addresses, ", ") }
-			b.WriteString(row(n.Name, state))
-		}
-	}
-	b.WriteString("\n"+m.styles.Help.Render("Ctrl+1 terminal  •  Ctrl+2 files  •  Ctrl+3 editor  •  Ctrl+5 tasks"))
-	return b.String()
+    info := m.sysInfo
+    var b strings.Builder
+    b.WriteString(m.styles.Section.Render("SYSTEM CENTER")+"\n")
+    b.WriteString(row("OS", info.OSPretty))
+    b.WriteString(row("Veldra", info.Version+" • "+info.Channel+" • "+info.Status))
+    b.WriteString(row("Kernel", info.KernelFull))
+    b.WriteString(row("CPU", info.CPUModel))
+    b.WriteString(row("Cores", fmt.Sprintf("%d", info.CPUCores)))
+    used := uint64(0)
+    if info.MemTotal > info.MemAvailable { used = info.MemTotal - info.MemAvailable }
+    b.WriteString(row("Memory", fmt.Sprintf("%s / %s MiB", mib(used), mib(info.MemTotal))))
+    b.WriteString(row("Hostname", info.Hostname))
+    b.WriteString(row("User", info.CurrentUser))
+    b.WriteString(row("Shell", info.Shell))
+    b.WriteString(row("Uptime", info.Uptime))
+    b.WriteString("\n"+m.styles.Section.Render("NETWORK")+"\n")
+    if len(info.Interfaces) == 0 {
+        b.WriteString(row("Interfaces", "none"))
+    } else {
+        for _, n := range info.Interfaces {
+            state := n.State
+            if n.HasIP { state += " • " + strings.Join(n.Addresses, ", ") }
+            b.WriteString(row(n.Name, state))
+        }
+    }
+    b.WriteString("\n"+m.styles.Help.Render("r refresh  ·  Ctrl+1 terminal  ·  Ctrl+2 files  ·  Ctrl+3 editor  ·  Ctrl+5 tasks"))
+    return b.String()
 }
 
-func mib(v uint64) string {
-	return fmt.Sprintf("%.0f", float64(v)/1024)
-}
+func mib(v uint64) string { return fmt.Sprintf("%.0f", float64(v)/1024) }
 
 func row(label, value string) string { return fmt.Sprintf("  %-16s  %s\n", label, value) }
 

@@ -22,6 +22,7 @@ import (
     "veldra/tui/files"
     "veldra/tui/system"
     "veldra/tui/taskmanager"
+    "veldra/tui/terminal"
     "veldra/tui/ui"
 )
 
@@ -77,6 +78,7 @@ type Model struct {
     terminalOut     []string
     terminalRunning bool
     terminalStatus  string
+    pty              *terminal.Session
 
     paletteOpen        bool
     paletteInput       []rune
@@ -591,7 +593,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
         m.ready = true
     case tea.KeyMsg:
         cmd = m.handleKey(msg)
-        if m.quitting { return m, tea.Quit }
+        if m.quitting {
+            if m.pty != nil { _ = m.pty.Close(); m.pty = nil }
+            return m, tea.Quit
+        }
     case tea.MouseMsg:
         m.handleMouse(msg)
     case terminalResultMsg:
