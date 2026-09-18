@@ -5,6 +5,7 @@
 
 [Unit]
 Description=Veldra Terminal Shell on serial console
+ConditionPathExists=/dev/ttyS0
 After=systemd-user-sessions.service local-fs.target
 Conflicts=serial-getty@ttyS0.service
 Before=serial-getty@ttyS0.service
@@ -15,7 +16,6 @@ User=@USER@
 Group=tty
 WorkingDirectory=/home/@USER@
 Environment=TERM=xterm-256color
-ConditionPathExists=/dev/ttyS0
 TTYPath=/dev/ttyS0
 StandardInput=tty-force
 StandardOutput=tty
