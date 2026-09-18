@@ -164,23 +164,6 @@ vd_info "staging Veldra layers"
 "${VELDRA_PROJECT_ROOT}/boot/install.sh" "$RFS" \
     || vd_die 1 "boot layer failed"
 
-# Serial consoles (headless QEMU, real serial servers) autologin the same
-# live user. systemd-getty-generator spawns getty@ttyS0 for a
-# `console=ttyS0` kernel argument; give it the same live autologin.
-# Serial consoles (headless QEMU, real serial servers) autologin the same
-# live user. For a `console=ttyS0` kernel argument the systemd getty
-# generator starts serial-getty@ttyS0.service (serial consoles), while a
-# local VT would use getty@ttyS0 — cover both templates.
-for _u in "serial-getty@ttyS0" "getty@ttyS0"; do
-    install -d -m 0755 "$RFS/etc/systemd/system/${_u}.service.d"
-    cat >"$RFS/etc/systemd/system/${_u}.service.d/veldra-autologin.conf" <<'EOF'
-[Service]
-ExecStart=
-ExecStart=-/usr/bin/agetty --autologin veldra --noclear --keep-baud %I 115200 linux
-EOF
-    chmod 0644 "$RFS/etc/systemd/system/${_u}.service.d/veldra-autologin.conf"
-done
-vd_ok "getty@ttyS0 autologin -> veldra"
 
 vd_info "configuring target"
 printf '%s\n' "${VELDRA_HOSTNAME:-veldra}" >"$RFS/etc/hostname"
@@ -211,6 +194,17 @@ EOF
 systemctl --root="$RFS" enable systemd-networkd 2>/dev/null || vd_warn "could not enable systemd-networkd"
 systemctl --root="$RFS" enable systemd-resolved 2>/dev/null || vd_warn "could not enable systemd-resolved"
 ln -sf /run/systemd/resolve/stub-resolv.conf "$RFS/etc/resolv.conf" 2>/dev/null || true
+
+# Keep the live session responsive: do not block boot waiting for DHCP and
+# suppress systemd status repaint while Bubble Tea owns the console.
+install -d -m 0755 "$RFS/etc/systemd/system" "$RFS/etc/systemd/system.conf.d"
+ln -sfn /dev/null "$RFS/etc/systemd/system/systemd-networkd-wait-online.service"
+cat >"$RFS/etc/systemd/system.conf.d/90-veldra-performance.conf" <<'EOF'
+[Manager]
+ShowStatus=no
+DefaultTimeoutStartSec=8s
+DefaultTimeoutStopSec=8s
+EOF
 
 # --- live initramfs ----------------------------------------------------------
 vd_info "building Veldra live initramfs (mkinitcpio, chroot)"

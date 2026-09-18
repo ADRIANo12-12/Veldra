@@ -138,7 +138,7 @@ func NewStyles(t Theme) Styles {
         Dir:                lipgloss.NewStyle().Foreground(t.WinDir).Bold(true),
         File:               lipgloss.NewStyle().Foreground(t.WinFile),
         Selected:           lipgloss.NewStyle().Background(t.FocusBg).Foreground(t.Accent).Bold(true),
-        WindowPanel:        lipgloss.NewStyle().Background(t.Surface).Foreground(t.Foreground),
+        WindowPanel:        lipgloss.NewStyle().Background(t.Surface).Foreground(t.Foreground).Border(lipgloss.RoundedBorder()).BorderForeground(t.Border),
         SideTitle:          lipgloss.NewStyle().Foreground(t.Muted).Bold(true),
         SideActive:         lipgloss.NewStyle().Foreground(t.Accent).Bold(true),
         SideItem:           lipgloss.NewStyle().Foreground(t.Foreground),

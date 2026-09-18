@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"net"
 	"runtime"
 	"strings"
 	"sync"
@@ -264,17 +265,16 @@ func netIfaces() ([]string, error) {
 
 func interfaceAddrs(name string) []string {
 	var out []string
-	b, err := exec.Command("ip", "-4", "-o", "addr", "show", name).Output()
-	if err != nil {
-		return out
-	}
-	for _, line := range strings.Split(string(b), "\n") {
-		if i := strings.Index(line, "inet "); i >= 0 {
-			rest := line[i+len("inet "):]
-			fields := strings.Fields(rest)
-			if len(fields) > 0 {
-				out = append(out, fields[0])
-			}
+	iface, err := net.InterfaceByName(name)
+	if err != nil { return out }
+	addrs, err := iface.Addrs()
+	if err != nil { return out }
+	for _, addr := range addrs {
+		switch v := addr.(type) {
+		case *net.IPNet:
+			if ip := v.IP.To4(); ip != nil { out = append(out, ip.String()) }
+		case *net.IPAddr:
+			if ip := v.IP.To4(); ip != nil { out = append(out, ip.String()) }
 		}
 	}
 	return out

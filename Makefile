@@ -63,10 +63,14 @@ replit-qemu: replit-iso ## Boot the Replit-compatible ISO in terminal curses mod
 		$(VELDRA_QEMU_ARGS) \
 		-cdrom "$(ISO)"
 
-qemu: ## Boot the built ISO headless (QEMU, -nographic)
-	@test -f "$(ISO)" || { echo "ISO not found: $(ISO) — run 'make iso' first'; exit 1; }
-	@echo "Booting Veldra $(VERSION) in QEMU (headless)..."
+qemu: ## Boot the built ISO headless (QEMU TCG, optimized for Codespaces)
+	@test -f "$(ISO)" || { echo "ISO not found: $(ISO) — run 'make iso' first"; exit 1; }
+	@echo "Booting Veldra $(VERSION) in QEMU/TCG (optimized)..."
 	@qemu-system-x86_64 \
+		-machine pc \
+		-accel tcg,thread=multi \
+		-cpu max \
+		-smp 4 \
 		-m 1024 \
 		-nographic \
 		$(VELDRA_QEMU_ARGS) \

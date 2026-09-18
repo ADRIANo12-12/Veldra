@@ -1,0 +1,30 @@
+// Veldra
+// Copyright (c) 2026 Adrian Sikora
+// All rights reserved.
+// Proprietary and confidential.
+
+[Unit]
+Description=Veldra Terminal Shell on tty1
+After=systemd-user-sessions.service local-fs.target
+Conflicts=getty@tty1.service
+Before=getty@tty1.service
+
+[Service]
+Type=simple
+User=@USER@
+Group=tty
+WorkingDirectory=/home/@USER@
+Environment=TERM=linux
+TTYPath=/dev/tty1
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=tty
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+ExecStart=/usr/local/bin/veldra-tui
+Restart=on-failure
+RestartSec=0.5
+
+[Install]
+WantedBy=multi-user.target

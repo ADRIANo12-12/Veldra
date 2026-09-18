@@ -67,14 +67,14 @@ printf 'Plan:\n  install source : %s\n  hostname       : %s\n  timezone       : 
 
 # --- 1. disk ---------------------------------------------------------------
 if [[ -n "${VD_DISK:-}" ]]; then
-    [[ -b "$VD_DISK" ]] || vd_die 1 "not a block device: $VD_DISK"
     VD_TARGET_DISK="$VD_DISK"
-    lsblk "$VD_TARGET_DISK" 2>/dev/null | sed 's/^/  /'
-    if ! vd_confirm "THIS WILL ERASE EVERYTHING ON $VD_TARGET_DISK. Continue?"; then
-        vd_die 0 "aborted."
-    fi
 else
     vd_choose_disk "$VD_DISK_ARG"
+fi
+vd_assert_disk_safe "$VD_TARGET_DISK"
+lsblk "$VD_TARGET_DISK" 2>/dev/null | sed 's/^/  /'
+if ! vd_confirm "THIS WILL ERASE EVERYTHING ON $VD_TARGET_DISK. Continue?"; then
+    vd_die 0 "aborted."
 fi
 
 # --- 2. partition -----------------------------------------------------------

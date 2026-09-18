@@ -117,7 +117,7 @@ func NewModel(startDir, startFile string) *Model {
     return m
 }
 
-func (m *Model) Init() tea.Cmd { return tick() }
+func (m *Model) Init() tea.Cmd { return tea.Batch(startPTY(m), tick()) }
 
 func tick() tea.Cmd {
     return tea.Tick(time.Second, func(time.Time) tea.Msg { return refreshMsg{} })
@@ -166,70 +166,79 @@ func (m *Model) handleWorkspaceKey(km tea.KeyMsg) tea.Cmd {
 }
 
 func (m *Model) handleTerminalKey(km tea.KeyMsg) tea.Cmd {
-    switch km.String() {
-    case "ctrl+q":
-        m.quitting = true
-        return nil
-    case "ctrl+p":
-        m.openPalette()
-        return nil
-    case "ctrl+l":
-        m.terminalOut = nil
-        return nil
-    case "ctrl+r":
-        m.refresh()
-        return nil
-    case "ctrl+1":
-        m.setActive(AppTerminal)
-        return nil
-    case "ctrl+2":
-        m.setActive(AppFiles)
-        return nil
-    case "ctrl+3":
-        m.setActive(AppEditor)
-        return nil
-    case "ctrl+4":
-        m.setActive(AppSettings)
-        return nil
-    case "ctrl+5":
-        m.setActive(AppTasks)
-        return nil
-    case "enter":
-        return m.acceptTerminalInput()
-    case "backspace":
-        m.deleteTerminalRune(-1)
-        return nil
-    case "delete":
-        m.deleteTerminalRune(1)
-        return nil
-    case "left":
-        if m.terminalCursor > 0 { m.terminalCursor-- }
-        return nil
-    case "right":
-        if m.terminalCursor < len(m.terminalInput) { m.terminalCursor++ }
-        return nil
-    case "home":
-        m.terminalCursor = 0
-        return nil
-    case "end":
-        m.terminalCursor = len(m.terminalInput)
-        return nil
-    case "up":
-        m.historyUp()
-        return nil
-    case "down":
-        m.historyDown()
-        return nil
-    case "esc":
-        m.terminalInput = nil
-        m.terminalCursor = 0
-        m.historyIndex = 0
-        return nil
-    }
-    if km.Type == tea.KeyRunes && len(km.Runes) > 0 {
-        m.insertTerminalRunes(km.Runes)
-    }
-    return nil
+	if m.pty != nil {
+		switch km.String() {
+		case "ctrl+q":
+			m.quitting = true
+			_ = m.pty.Close()
+			return tea.Quit
+		case "ctrl+p":
+			m.openPalette()
+			return nil
+		case "ctrl+l":
+			m.terminalOut = nil
+			return nil
+		case "ctrl+r":
+			m.refresh()
+			return nil
+		case "ctrl+1": m.setActive(AppTerminal); return nil
+		case "ctrl+2": m.setActive(AppFiles); return nil
+		case "ctrl+3": m.setActive(AppEditor); return nil
+		case "ctrl+4": m.setActive(AppSettings); return nil
+		case "ctrl+5": m.setActive(AppTasks); return nil
+		}
+		if data := terminalKeyBytes(km); len(data) > 0 {
+			_ = m.pty.Write(data)
+		}
+		return nil
+	}
+
+	switch km.String() {
+	case "ctrl+q":
+		m.quitting = true
+		return nil
+	case "ctrl+p":
+		m.openPalette()
+		return nil
+	case "ctrl+l":
+		m.terminalOut = nil
+		return nil
+	case "ctrl+r":
+		m.refresh()
+		return nil
+	case "ctrl+1":
+		m.setActive(AppTerminal); return nil
+	case "ctrl+2":
+		m.setActive(AppFiles); return nil
+	case "ctrl+3":
+		m.setActive(AppEditor); return nil
+	case "ctrl+4":
+		m.setActive(AppSettings); return nil
+	case "ctrl+5":
+		m.setActive(AppTasks); return nil
+	case "enter":
+		return m.acceptTerminalInput()
+	case "backspace":
+		m.deleteTerminalRune(-1); return nil
+	case "delete":
+		m.deleteTerminalRune(1); return nil
+	case "left":
+		if m.terminalCursor > 0 { m.terminalCursor-- }; return nil
+	case "right":
+		if m.terminalCursor < len(m.terminalInput) { m.terminalCursor++ }; return nil
+	case "home":
+		m.terminalCursor = 0; return nil
+	case "end":
+		m.terminalCursor = len(m.terminalInput); return nil
+	case "up":
+		m.historyUp(); return nil
+	case "down":
+		m.historyDown(); return nil
+	case "esc":
+		m.terminalInput = nil; m.terminalCursor = 0; m.historyIndex = 0; return nil
+	}
+	if km.Type == tea.KeyRunes && len(km.Runes) > 0 { m.insertTerminalRunes(km.Runes) }
+	return nil
 }
 
 func (m *Model) insertTerminalRunes(rs []rune) {
@@ -255,21 +264,26 @@ func (m *Model) deleteTerminalRune(direction int) {
 }
 
 func (m *Model) acceptTerminalInput() tea.Cmd {
-    command := strings.TrimSpace(string(m.terminalInput))
-    m.terminalInput = nil
-    m.terminalCursor = 0
-    m.historyIndex = 0
-    m.terminalScratch = nil
-    if command == "" || m.terminalRunning { return nil }
+	command := strings.TrimSpace(string(m.terminalInput))
+	m.terminalInput = nil
+	m.terminalCursor = 0
+	m.historyIndex = 0
+	m.terminalScratch = nil
+	if command == "" { return nil }
 
-    m.terminalHistory = append(m.terminalHistory, command)
-    m.terminalOut = append(m.terminalOut, m.prompt()+" "+command)
-    m.trimTerminalOutput()
-    if handled, cmd := m.handleBuiltin(command); handled { return cmd }
+	if m.pty != nil {
+		_, _ = m.pty.Write([]byte(command + "\r"))
+		return nil
+	}
 
-    m.terminalRunning = true
-    m.terminalStatus = "running"
-    return runTerminalCommand(m.cwd, command)
+	if m.terminalRunning { return nil }
+	m.terminalHistory = append(m.terminalHistory, command)
+	m.terminalOut = append(m.terminalOut, m.prompt()+" "+command)
+	m.trimTerminalOutput()
+	if handled, cmd := m.handleBuiltin(command); handled { return cmd }
+	m.terminalRunning = true
+	m.terminalStatus = "running"
+	return runTerminalCommand(m.cwd, command)
 }
 
 func (m *Model) handleBuiltin(command string) (bool, tea.Cmd) {

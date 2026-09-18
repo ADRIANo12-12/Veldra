@@ -46,7 +46,11 @@ func (m *Model) viewTopBar() string {
         workspaces += item
     }
     memUsed := float64(m.sysInfo.MemTotal-m.sysInfo.MemAvailable) / 1024
-    right := m.styles.BarRight.Render(fmt.Sprintf(" %s  %s  %dC  MEM %.0fM ", time.Now().Format("15:04:05"), m.sysInfo.Hostname, m.sysInfo.CPUCores, memUsed))
+    netState := "offline"
+	for _, iface := range m.sysInfo.Interfaces {
+		if iface.HasIP { netState = "online"; break }
+	}
+	right := m.styles.BarRight.Render(fmt.Sprintf(" %s  %s  NET %s  %dC  MEM %.0fM ", time.Now().Format("15:04:05"), m.sysInfo.Hostname, netState, m.sysInfo.CPUCores, memUsed))
     used := lipgloss.Width(left) + lipgloss.Width(workspaces) + lipgloss.Width(right)
     gap := m.width - used
     if gap < 1 { gap = 1 }
@@ -209,20 +213,35 @@ func (m *Model) renderEditor() string {
 }
 
 func (m *Model) renderSettings() string {
-    info := m.sysInfo
-    var b strings.Builder
-    b.WriteString(m.styles.Section.Render("SYSTEM")+"\n")
-    b.WriteString(row("OS", "Veldra OS"))
-    b.WriteString(row("Version", info.Version))
-    b.WriteString(row("Channel", info.Channel))
-    b.WriteString(row("Kernel", info.KernelFull))
-    b.WriteString(row("Hostname", info.Hostname))
-    b.WriteString(row("User", info.CurrentUser))
-    b.WriteString(row("Shell", info.Shell))
-    b.WriteString("\n"+m.styles.Section.Render("NETWORK")+"\n")
-    if len(info.Interfaces) == 0 { b.WriteString(row("Interfaces", "none")) }
-    for _, n := range info.Interfaces { b.WriteString(row(n.Name, fmt.Sprintf("%s (%s)", n.State, strings.Join(n.Addresses, ", ")))) }
-    return b.String()
+	info := m.sysInfo
+	var b strings.Builder
+	b.WriteString(m.styles.Section.Render("SYSTEM CENTER")+"\n")
+	b.WriteString(row("OS", info.OSPretty))
+	b.WriteString(row("Veldra", info.Version+" • "+info.Channel+" • "+info.Status))
+	b.WriteString(row("Kernel", info.KernelFull))
+	b.WriteString(row("CPU", info.CPUModel))
+	b.WriteString(row("Cores", fmt.Sprintf("%d", info.CPUCores)))
+	b.WriteString(row("Memory", fmt.Sprintf("%s / %s MiB", mib(info.MemTotal-info.MemAvailable), mib(info.MemTotal))))
+	b.WriteString(row("Hostname", info.Hostname))
+	b.WriteString(row("User", info.CurrentUser))
+	b.WriteString(row("Shell", info.Shell))
+	b.WriteString(row("Uptime", info.Uptime))
+	b.WriteString("\n"+m.styles.Section.Render("NETWORK")+"\n")
+	if len(info.Interfaces) == 0 {
+		b.WriteString(row("Interfaces", "none"))
+	} else {
+		for _, n := range info.Interfaces {
+			state := n.State
+			if n.HasIP { state += " • " + strings.Join(n.Addresses, ", ") }
+			b.WriteString(row(n.Name, state))
+		}
+	}
+	b.WriteString("\n"+m.styles.Help.Render("Ctrl+1 terminal  •  Ctrl+2 files  •  Ctrl+3 editor  •  Ctrl+5 tasks"))
+	return b.String()
+}
+
+func mib(v uint64) string {
+	return fmt.Sprintf("%.0f", float64(v)/1024)
 }
 
 func row(label, value string) string { return fmt.Sprintf("  %-16s  %s\n", label, value) }

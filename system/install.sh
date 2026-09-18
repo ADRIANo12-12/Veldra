@@ -67,11 +67,21 @@ vd_ok "etc/default/useradd"
 # systemd text-console autologin so the Veldra TUI starts as the first
 # interactive environment (only when a live/install user is requested).
 if [[ -n "$AUTOLOGIN_USER" ]]; then
-    install -d -m 0755 "${ROOT}/etc/systemd/system/getty@tty1.service.d"
-    "${INJECT}" inject "${SRC}/systemd/getty-veldra-autologin.conf.in" \
-        | sed "s/@USER@/${AUTOLOGIN_USER}/" \
-        >"${ROOT}/etc/systemd/system/getty@tty1.service.d/veldra-autologin.conf"
-    vd_ok "getty@tty1 autologin -> ${AUTOLOGIN_USER}"
+    install -d -m 0755 "${ROOT}/etc/systemd/system"
+    "${INJECT}" inject "${SRC}/systemd/veldra-tui-tty1.service.in" \
+        | sed "s/@USER@/${AUTOLOGIN_USER}/g" \
+        >"${ROOT}/etc/systemd/system/veldra-tui-tty1.service"
+    "${INJECT}" inject "${SRC}/systemd/veldra-tui-serial.service.in" \
+        | sed "s/@USER@/${AUTOLOGIN_USER}/g" \
+        >"${ROOT}/etc/systemd/system/veldra-tui-serial.service"
+
+    # The primary Veldra consoles are owned by the TUI service. tty2+ remain
+    # normal gettys for an escape hatch to a conventional login shell.
+    ln -sfn /dev/null "${ROOT}/etc/systemd/system/getty@tty1.service"
+    ln -sfn /dev/null "${ROOT}/etc/systemd/system/serial-getty@ttyS0.service"
+    systemctl --root="$ROOT" enable veldra-tui-tty1.service >/dev/null 2>&1 || true
+    systemctl --root="$ROOT" enable veldra-tui-serial.service >/dev/null 2>&1 || true
+    vd_ok "TUI console services enabled -> ${AUTOLOGIN_USER}"
 fi
 
 # Veldra branding copy for the live/installed system.
