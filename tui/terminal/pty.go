@@ -21,9 +21,10 @@ type Session struct {
 	mu   sync.Mutex
 }
 
-func Start(shell string, cols, rows int, env []string) (*Session, error) {
+func Start(shell, dir string, cols, rows int, env []string) (*Session, error) {
 	if shell == "" { shell = "/bin/bash" }
 	cmd := exec.Command(shell, "-i")
+	if dir != "" { cmd.Dir = dir }
 	cmd.Env = append([]string{}, env...)
 	cmd.Env = append(cmd.Env,
 		"TERM=xterm-256color",

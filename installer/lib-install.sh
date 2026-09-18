@@ -56,7 +56,7 @@ vd_install_src_require() {
 
 # --- prereqs ---------------------------------------------------------------
 vd_install_prereqs() {
-    vd_require lsblk parted mkfs.ext4 mount umount arch-chroot pacstrap \
+    vd_require lsblk parted mkfs.ext4 mkfs.fat mount umount partprobe arch-chroot pacstrap \
         genfstab grub-install grub-mkconfig mkinitcpio systemctl tar zstd
     [[ "$(id -u)" == "0" ]] || vd_die 2 "the Veldra installer must run as root"
 }

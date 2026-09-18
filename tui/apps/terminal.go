@@ -29,7 +29,7 @@ func startPTY(m *Model) tea.Cmd {
 	return func() tea.Msg {
 		shell := m.sysInfo.Shell
 		if shell == "" { shell = "/bin/bash" }
-		s, err := termpty.Start(shell, m.width-2, m.height-5, os.Environ())
+		s, err := termpty.Start(shell, m.cwd, m.width-2, m.height-5, os.Environ())
 		return ptyStartedMsg{Session: s, Err: err}
 	}
 }

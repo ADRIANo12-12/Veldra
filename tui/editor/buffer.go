@@ -75,7 +75,11 @@ func (b *Buffer) InsertAt(row, col int, text string) {
 	if col > len(line) {
 		col = len(line)
 	}
-	b.Lines[row] = line[:col] + text + line[col:]
+	runes := []rune(line)
+	if col > len(runes) { col = len(runes) }
+	insert := []rune(text)
+	runes = append(runes[:col], append(insert, runes[col:]...)...)
+	b.Lines[row] = string(runes)
 	b.Modified = true
 }
 
@@ -88,7 +92,10 @@ func (b *Buffer) DeleteAt(row, col int) bool {
 	if col < 0 || col >= len(line) {
 		return false // would need join logic; handle backspace at col 0 below
 	}
-	b.Lines[row] = line[:col] + line[col+1:]
+	runes := []rune(line)
+	if col < 0 || col >= len(runes) { return false }
+	runes = append(runes[:col], runes[col+1:]...)
+	b.Lines[row] = string(runes)
 	b.Modified = true
 	return true
 }
@@ -105,7 +112,10 @@ func (b *Buffer) SplitLine(row, col int) bool {
 	if col < 0 {
 		col = 0
 	}
-	head, tail := line[:col], line[col:]
+	runes := []rune(line)
+	if col > len(runes) { col = len(runes) }
+	if col < 0 { col = 0 }
+	head, tail := string(runes[:col]), string(runes[col:])
 	newLines := make([]string, 0, len(b.Lines)+1)
 	newLines = append(newLines, b.Lines[:row]...)
 	newLines = append(newLines, head, tail)

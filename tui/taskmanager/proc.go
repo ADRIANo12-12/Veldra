@@ -124,12 +124,12 @@ func (c *Collector) stat(pid int) *Process {
 	}
 	hz := float64(100) // USER_HZ is 100 on x86_64
 	p.CPUseconds = (float64(utime) + float64(stime)) / hz
-	// rest[21] = rss pages, rest[22] = vsize bytes
-	if len(rest) > 22 {
+	// rest[20] = vsize bytes, rest[21] = rss pages
+	if len(rest) > 21 {
 		if v, err := strconv.ParseUint(rest[21], 10, 64); err == nil {
 			p.RSS = v * uint64(os.Getpagesize()/1024) // pages -> KiB
 		}
-		if v, err := strconv.ParseUint(rest[22], 10, 64); err == nil {
+		if v, err := strconv.ParseUint(rest[20], 10, 64); err == nil {
 			p.VSZ = v / 1024
 		}
 	}
